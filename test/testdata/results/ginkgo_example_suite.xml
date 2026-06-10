@@ -1,0 +1,24 @@
+<testsuites>
+  <testsuite name="Example Ginkgo Suite" tests="3" failures="0" time="120">
+    <property name="SpecialSuiteFailureReason" value=""/>
+    <property name="SemVerFilter" value=""/>
+    <properties>
+      <property name="ci-lane" value="example"/>
+    </properties>
+    <testcase classname="example" name="[It] verifies stability under load [stability, 10001, test_id:10001]" time="1.0">
+      <properties>
+        <property name="inventory-testcase-id" value="INV-10001"/>
+      </properties>
+    </testcase>
+    <testcase classname="example" name="[It] handles interface state changes [interfaces, 10002, test_id:10002]" time="2.0">
+      <properties>
+        <property name="inventory-testcase-id" value="INV-10002"/>
+      </properties>
+    </testcase>
+    <testcase classname="example" name="[It] applies log reduction settings [log-reduction, 10003, test_id:10003]" time="3.0">
+      <properties>
+        <property name="inventory-testcase-id" value="INV-10003"/>
+      </properties>
+    </testcase>
+  </testsuite>
+</testsuites>

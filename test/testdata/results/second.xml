@@ -1,0 +1,5 @@
+<testsuites>
+  <testsuite name="OtherSuite">
+    <testcase classname="X" name="same" time="0"/>
+  </testsuite>
+</testsuites>

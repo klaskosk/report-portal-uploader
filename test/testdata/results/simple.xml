@@ -1,0 +1,8 @@
+<testsuites>
+  <testsuite name="SuiteA" time="1,0">
+    <testcase classname="com.example.Tests" name="passes" time="0.1"/>
+    <testcase classname="com.example.Tests" name="fails" time="0.2">
+      <failure type="AssertionError" message="expected true"/>
+    </testcase>
+  </testsuite>
+</testsuites>

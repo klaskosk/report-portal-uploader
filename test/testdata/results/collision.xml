@@ -1,0 +1,9 @@
+<testsuites>
+  <testsuite name="Shared">
+    <testcase classname="A" name="same" time="0">
+      <properties>
+        <property name="ci-lane" value="lane-a"/>
+      </properties>
+    </testcase>
+  </testsuite>
+</testsuites>

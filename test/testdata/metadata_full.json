@@ -1,0 +1,20 @@
+{
+  "targets": {
+    "reportportal": {
+      "disabled": false,
+      "config": {
+        "hostname": "reportportal.example.com",
+        "project": "demo"
+      },
+      "processing": {
+        "property_filter": ["inventory-.*", "ci-lane", "attachment"],
+        "disable_testitem_updater": false,
+        "testcase_concat_char": ".",
+        "launch": {
+          "name": "integration-full-launch",
+          "description": "Layer 1 full parity fixture"
+        }
+      }
+    }
+  }
+}

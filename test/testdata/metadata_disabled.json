@@ -1,0 +1,12 @@
+{
+  "targets": {
+    "reportportal": {
+      "disabled": true,
+      "config": {
+        "hostname": "reportportal.example.com",
+        "project": "demo"
+      },
+      "processing": {}
+    }
+  }
+}

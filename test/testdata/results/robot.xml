@@ -1,0 +1,7 @@
+<testsuites>
+  <testsuite name="RobotSuite">
+    <testcase classname="Robot" name="emptyFailure" time="0">
+      <failure type="FAIL" message="Keyword failed"/>
+    </testcase>
+  </testsuite>
+</testsuites>

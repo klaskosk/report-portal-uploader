@@ -1,0 +1,18 @@
+{
+  "targets": {
+    "reportportal": {
+      "disabled": false,
+      "config": {
+        "hostname": "reportportal.example.com",
+        "project": "demo"
+      },
+      "processing": {
+        "disable_testitem_updater": true,
+        "launch": {
+          "name": "integration-test-launch",
+          "description": "Layer 1 import-only fixture"
+        }
+      }
+    }
+  }
+}
