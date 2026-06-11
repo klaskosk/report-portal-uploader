@@ -180,6 +180,11 @@ func substituteMetadataVars(path string, vars map[string]string) (string, error)
 	return temp.Name(), nil
 }
 
+// CompilePropertyFilters compiles RE2 patterns for full-string property name matching.
+func CompilePropertyFilters(patterns []string) ([]*regexp.Regexp, error) {
+	return compilePropertyFilters(patterns)
+}
+
 func compilePropertyFilters(patterns []string) ([]*regexp.Regexp, error) {
 	if len(patterns) == 0 {
 		return nil, nil
@@ -239,6 +244,11 @@ func parseLaunchAttributes(raw []map[string]any) ([]LaunchAttribute, WarningList
 	return attrs, warnings
 }
 
+// InjectLaunchAttributes adds rpu-req-id and skippedIsNotIssue launch attributes.
+func InjectLaunchAttributes(attrs []LaunchAttribute, requestID string) []LaunchAttribute {
+	return injectLaunchAttributes(attrs, requestID)
+}
+
 func injectLaunchAttributes(attrs []LaunchAttribute, requestID string) []LaunchAttribute {
 	out := make([]LaunchAttribute, 0, len(attrs)+2)
 	out = append(out, attrs...)
@@ -261,6 +271,11 @@ func injectLaunchAttributes(attrs []LaunchAttribute, requestID string) []LaunchA
 	return out
 }
 
+// HostnameURL returns the Report Portal API base URL for a hostname value.
+func HostnameURL(hostname string) string {
+	return hostnameURL(hostname)
+}
+
 func hostnameURL(hostname string) string {
 	trimmed := strings.TrimSpace(hostname)
 	if strings.HasPrefix(trimmed, "http://") || strings.HasPrefix(trimmed, "https://") {
@@ -268,6 +283,11 @@ func hostnameURL(hostname string) string {
 	}
 
 	return fmt.Sprintf("https://%s/", strings.TrimSuffix(trimmed, "/"))
+}
+
+// ValidateConcatChar reports whether testcase_concat_char is allowed.
+func ValidateConcatChar(char string) error {
+	return validateConcatChar(char)
 }
 
 func validateConcatChar(char string) error {

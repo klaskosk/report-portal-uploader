@@ -7,6 +7,7 @@ import (
 
 	"github.com/klaskosk/report-portal-uploader/internal/cli/core"
 	"github.com/klaskosk/report-portal-uploader/internal/cli/send"
+	"github.com/klaskosk/report-portal-uploader/internal/cli/upload"
 	"github.com/spf13/cobra"
 )
 
@@ -63,6 +64,7 @@ func newRootCmd() *cobra.Command {
 	flags.Bool("keep-workdir", false, "Keep temporary work directory after upload")
 
 	send.AddCommands(cmd)
+	upload.AddCommands(cmd)
 
 	return cmd
 }

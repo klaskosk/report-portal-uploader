@@ -1,0 +1,8 @@
+<testsuites>
+  <testsuite name="[gm] Suite">
+    <properties>
+      <property name="ci-lane" value="gm"></property>
+    </properties>
+    <testcase classname="C" name="N"/>
+  </testsuite>
+</testsuites>

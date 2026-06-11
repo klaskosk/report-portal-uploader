@@ -1,0 +1,5 @@
+<testsuites>
+  <testsuite name="Suite" time="not-a-number">
+    <testcase classname="C" name="N" status="passed" time="1.5"/>
+  </testsuite>
+</testsuites>

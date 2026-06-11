@@ -1,0 +1,5 @@
+<testsuites>
+  <testsuite name="Suite">
+    <testcase classname="C" name="N"/>
+  </testsuite>
+</testsuites>

@@ -1,0 +1,7 @@
+<testsuites disabled="true">
+  <testsuite name="Suite" disabled="yes">
+    <testcase name="N" status="failed"/>
+    <results_directory>/tmp/results</results_directory>
+    <results_summary>summary text</results_summary>
+  </testsuite>
+</testsuites>

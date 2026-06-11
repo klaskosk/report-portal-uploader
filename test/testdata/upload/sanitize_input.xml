@@ -1,0 +1,8 @@
+<testsuites>
+  <testsuite name="Suite">
+    <testcase name="N">
+      <system-out>&lt;tag&gt;&amp;gt;broken&lt;&lt;&#xA;line</system-out>
+      <system-err>err &lt; &gt;</system-err>
+    </testcase>
+  </testsuite>
+</testsuites>

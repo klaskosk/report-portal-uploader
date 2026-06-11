@@ -12,7 +12,7 @@ import (
 	"github.com/klaskosk/report-portal-cli/pkg/client"
 )
 
-// Config holds runtime options for the upload pipeline.
+// Config holds runtime options for the send command upload pipeline.
 type Config struct {
 	MetadataPath   string
 	ResultsGlob    string
@@ -22,6 +22,22 @@ type Config struct {
 	HTTPTimeout    time.Duration
 	KeepWorkDir    bool
 	LaunchURLFile  string
+}
+
+// PipelineConfig holds shared runtime options for upload pipelines.
+type PipelineConfig struct {
+	AttachmentsDir string
+	Token          string
+	HTTPTimeout    time.Duration
+	KeepWorkDir    bool
+	LaunchURLFile  string
+}
+
+// SourceInput is one prepared XML source before Layer 1 transforms.
+type SourceInput struct {
+	OriginalPath string
+	WorkdirName  string
+	Content      []byte
 }
 
 // Result is the structured outcome of a successful upload.
@@ -34,7 +50,7 @@ type Result struct {
 	Message   string        `json:"message,omitempty"`
 }
 
-// Run executes prepare → import → postprocess.
+// Run executes prepare → import → postprocess for the send command.
 func Run(ctx context.Context, cfg Config, logger *slog.Logger) (Result, error) {
 	meta, err := ParseMetadataFile(cfg.MetadataPath, cfg.TemplateVars)
 	if err != nil {
@@ -58,8 +74,12 @@ func Run(ctx context.Context, cfg Config, logger *slog.Logger) (Result, error) {
 		warnings.Add("metadata", "apply_llm_analysis is enabled but LLM analysis is not implemented in Layer 1")
 	}
 
-	if cfg.Token == "" {
-		return Result{}, fmt.Errorf("no API token configured (use --token or REPORTPORTAL_TOKEN)")
+	if cfg.ResultsGlob == "" {
+		return Result{}, fmt.Errorf("--results is required")
+	}
+
+	if cfg.AttachmentsDir != "" && cfg.ResultsGlob == "" {
+		return Result{}, fmt.Errorf("--attachments cannot be used without --results")
 	}
 
 	sourcePaths, err := ExpandResultsGlob(cfg.ResultsGlob)
@@ -67,13 +87,55 @@ func Run(ctx context.Context, cfg Config, logger *slog.Logger) (Result, error) {
 		return Result{}, err
 	}
 
-	if cfg.AttachmentsDir != "" && cfg.ResultsGlob == "" {
-		return Result{}, fmt.Errorf("--attachments cannot be used without --results")
+	sources := make([]SourceInput, 0, len(sourcePaths))
+	for _, sourcePath := range sourcePaths {
+		content, readErr := os.ReadFile(sourcePath)
+		if readErr != nil {
+			return Result{}, fmt.Errorf("reading %q: %w", sourcePath, readErr)
+		}
+
+		sources = append(sources, SourceInput{
+			OriginalPath: sourcePath,
+			WorkdirName:  filepath.Base(sourcePath),
+			Content:      content,
+		})
+	}
+
+	pipelineCfg := PipelineConfig{
+		AttachmentsDir: cfg.AttachmentsDir,
+		Token:          cfg.Token,
+		HTTPTimeout:    cfg.HTTPTimeout,
+		KeepWorkDir:    cfg.KeepWorkDir,
+		LaunchURLFile:  cfg.LaunchURLFile,
+	}
+
+	result, runWarnings, err := RunWithMetadata(ctx, meta, pipelineCfg, sources, logger)
+	warnings = append(warnings, runWarnings...)
+
+	return result, err
+}
+
+// RunWithMetadata executes prepare → import → postprocess using a prepared Metadata value.
+func RunWithMetadata(
+	ctx context.Context,
+	meta *Metadata,
+	cfg PipelineConfig,
+	sources []SourceInput,
+	logger *slog.Logger,
+) (Result, WarningList, error) {
+	var warnings WarningList
+
+	if cfg.Token == "" {
+		return Result{}, warnings, fmt.Errorf("no API token configured (use --token or REPORTPORTAL_TOKEN)")
+	}
+
+	if len(sources) == 0 {
+		return Result{}, warnings, fmt.Errorf("no source files to upload")
 	}
 
 	workDir, err := os.MkdirTemp("", "rpu-workdir-*")
 	if err != nil {
-		return Result{}, fmt.Errorf("creating work directory: %w", err)
+		return Result{}, warnings, fmt.Errorf("creating work directory: %w", err)
 	}
 
 	if cfg.KeepWorkDir {
@@ -82,46 +144,46 @@ func Run(ctx context.Context, cfg Config, logger *slog.Logger) (Result, error) {
 		defer os.RemoveAll(workDir)
 	}
 
-	processedPaths, index, prepareWarnings, err := CopyAndPrepareResults(
+	processedPaths, index, prepareWarnings, err := CopyAndPrepareSourceInputs(
 		workDir,
-		sourcePaths,
+		sources,
 		cfg.AttachmentsDir,
 		meta,
 	)
 	warnings = append(warnings, prepareWarnings...)
 	if err != nil {
-		return Result{}, err
+		return Result{}, warnings, err
 	}
 
 	zipPath, err := BuildImportZip(workDir, processedPaths)
 	if err != nil {
-		return Result{}, err
+		return Result{}, warnings, err
 	}
 
 	httpClient := &http.Client{Timeout: cfg.HTTPTimeout}
 	rpClient, err := client.New(meta.HostnameURL, cfg.Token, client.WithHTTPClient(httpClient))
 	if err != nil {
-		return Result{}, fmt.Errorf("creating Report Portal client: %w", err)
+		return Result{}, warnings, fmt.Errorf("creating Report Portal client: %w", err)
 	}
 
 	importAPI := &ClientImportAPI{Client: rpClient}
 	importResult, importWarnings, err := RunImport(ctx, importAPI, meta, zipPath)
 	warnings = append(warnings, importWarnings...)
 	if err != nil {
-		return Result{}, err
+		return Result{}, warnings, err
 	}
 
 	postAPI := &ClientPostImportAPI{Client: rpClient}
 	postWarnings, err := RunPostImport(ctx, postAPI, meta, importResult, index, cfg.AttachmentsDir)
 	warnings = append(warnings, postWarnings...)
 	if err != nil {
-		return Result{}, err
+		return Result{}, warnings, err
 	}
 
 	if cfg.LaunchURLFile != "" {
 		err = os.WriteFile(cfg.LaunchURLFile, []byte(importResult.LaunchURL+"\n"), 0o644)
 		if err != nil {
-			return Result{}, fmt.Errorf("writing launch URL file: %w", err)
+			return Result{}, warnings, fmt.Errorf("writing launch URL file: %w", err)
 		}
 	}
 
@@ -130,7 +192,7 @@ func Run(ctx context.Context, cfg Config, logger *slog.Logger) (Result, error) {
 		LaunchID:   importResult.LaunchID,
 		LaunchUUID: importResult.LaunchUUID,
 		Warnings:   warnings.Messages(),
-	}, nil
+	}, warnings, nil
 }
 
 // WritePreparedArtifacts copies prepared XML to destDir for debugging when keep-workdir is set.

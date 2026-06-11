@@ -726,6 +726,30 @@ func CopyAndPrepareResults(
 	attachmentsDir string,
 	meta *Metadata,
 ) ([]string, TestCaseIndex, WarningList, error) {
+	sources := make([]SourceInput, 0, len(sourcePaths))
+	for _, sourcePath := range sourcePaths {
+		content, err := os.ReadFile(sourcePath)
+		if err != nil {
+			return nil, TestCaseIndex{}, nil, fmt.Errorf("reading %q: %w", sourcePath, err)
+		}
+
+		sources = append(sources, SourceInput{
+			OriginalPath: sourcePath,
+			WorkdirName:  filepath.Base(sourcePath),
+			Content:      content,
+		})
+	}
+
+	return CopyAndPrepareSourceInputs(workDir, sources, attachmentsDir, meta)
+}
+
+// CopyAndPrepareSourceInputs copies prepared source inputs into workDir/results, applies Layer 1 transforms, and builds the index.
+func CopyAndPrepareSourceInputs(
+	workDir string,
+	sources []SourceInput,
+	attachmentsDir string,
+	meta *Metadata,
+) ([]string, TestCaseIndex, WarningList, error) {
 	resultsDir := filepath.Join(workDir, "results")
 	err := os.MkdirAll(resultsDir, 0o755)
 	if err != nil {
@@ -733,23 +757,18 @@ func CopyAndPrepareResults(
 	}
 
 	var warnings WarningList
-	processedPaths := make([]string, 0, len(sourcePaths))
+	processedPaths := make([]string, 0, len(sources))
 
-	for _, sourcePath := range sourcePaths {
-		input, err := os.ReadFile(sourcePath)
-		if err != nil {
-			return nil, TestCaseIndex{}, warnings, fmt.Errorf("reading %q: %w", sourcePath, err)
-		}
-
-		output, fileWarnings, err := PrepareXML(input, meta.TestCaseConcatChar)
+	for _, source := range sources {
+		output, fileWarnings, err := PrepareXML(source.Content, meta.TestCaseConcatChar)
 		warnings = append(warnings, fileWarnings...)
 		if err != nil {
-			warnings.Add("prepare", fmt.Sprintf("Ignoring file %s: %s", filepath.Base(sourcePath), err.Error()))
+			warnings.Add("prepare", fmt.Sprintf("Ignoring file %s: %s", filepath.Base(source.OriginalPath), err.Error()))
 
 			continue
 		}
 
-		destPath := filepath.Join(resultsDir, filepath.Base(sourcePath))
+		destPath := filepath.Join(resultsDir, source.WorkdirName)
 		err = os.WriteFile(destPath, output, 0o644)
 		if err != nil {
 			return nil, TestCaseIndex{}, warnings, fmt.Errorf("writing prepared XML: %w", err)
