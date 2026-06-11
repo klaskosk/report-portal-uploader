@@ -15,9 +15,9 @@ func (warnings *WarningList) Add(source, message string) {
 }
 
 // Messages returns plain warning strings for JSON output.
-func (warnings WarningList) Messages() []string {
-	out := make([]string, len(warnings))
-	for i, warning := range warnings {
+func (warnings *WarningList) Messages() []string {
+	out := make([]string, len(*warnings))
+	for i, warning := range *warnings {
 		out[i] = warning.Message
 	}
 

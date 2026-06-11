@@ -1,4 +1,4 @@
-package send
+package send_test
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/klaskosk/report-portal-cli/pkg/types"
+	"github.com/klaskosk/report-portal-uploader/internal/send"
 	"github.com/stretchr/testify/require"
 )
 
@@ -51,13 +52,13 @@ func (fake *fakeImportAPI) UpdateLaunch(
 func TestRunImport_successPath(t *testing.T) {
 	t.Parallel()
 
-	meta := &Metadata{
+	meta := &send.Metadata{
 		HostnameURL: "https://rp.example.com/",
 		Project:     "demo",
 		LaunchName:  "launch",
 		RequestID:   "req-1",
-		LaunchAttributes: []LaunchAttribute{
-			{Key: launchRequestIDAttrKey, Value: "req-1"},
+		LaunchAttributes: []send.LaunchAttribute{
+			{Key: send.LaunchRequestIDAttrKey, Value: "req-1"},
 		},
 	}
 
@@ -68,7 +69,7 @@ func TestRunImport_successPath(t *testing.T) {
 		launch: &types.LaunchResource{Id: 42, Uuid: "uuid-1"},
 	}
 
-	result, _, err := RunImport(context.Background(), api, meta, "results.zip")
+	result, _, err := send.RunImport(context.Background(), api, meta, "results.zip")
 	require.NoError(t, err, "expected import success")
 	require.Equal(t, int64(42), result.LaunchID, "expected launch id")
 	require.Equal(t, "uuid-1", result.LaunchUUID, "expected launch uuid")
@@ -77,14 +78,14 @@ func TestRunImport_successPath(t *testing.T) {
 func TestRunImport_504RecoveryByRequestID(t *testing.T) {
 	t.Parallel()
 
-	meta := &Metadata{
+	meta := &send.Metadata{
 		HostnameURL: "https://rp.example.com/",
 		Project:     "demo",
 		LaunchName:  "launch",
 		RequestID:   "req-504",
 	}
 
-	key := launchRequestIDAttrKey
+	key := send.LaunchRequestIDAttrKey
 	value := "req-504"
 	now := time.Now()
 	launches := []types.LaunchResource{{
@@ -98,12 +99,12 @@ func TestRunImport_504RecoveryByRequestID(t *testing.T) {
 	}}
 
 	api := &fakeImportAPI{
-		importErr: &GatewayTimeoutError{Err: errors.New("HTTP 504 Gateway Timeout")},
+		importErr: &send.GatewayTimeoutError{Err: errors.New("HTTP 504 Gateway Timeout")},
 		latest:    &types.PageLaunchResource{Content: &launches},
 		launch:    &types.LaunchResource{Id: 99, Uuid: "recovered-uuid"},
 	}
 
-	result, _, err := RunImport(context.Background(), api, meta, "results.zip")
+	result, _, err := send.RunImport(context.Background(), api, meta, "results.zip")
 	require.NoError(t, err, "expected 504 recovery")
 	require.Equal(t, "recovered-uuid", result.LaunchUUID, "expected recovered uuid")
 }
@@ -111,7 +112,7 @@ func TestRunImport_504RecoveryByRequestID(t *testing.T) {
 func TestRunImport_504RecoveryTimeWindowFallback(t *testing.T) {
 	t.Parallel()
 
-	meta := &Metadata{
+	meta := &send.Metadata{
 		HostnameURL: "https://rp.example.com/",
 		Project:     "demo",
 		LaunchName:  "launch",
@@ -131,7 +132,7 @@ func TestRunImport_504RecoveryTimeWindowFallback(t *testing.T) {
 		launch:         &types.LaunchResource{Id: 77, Uuid: "recent-uuid"},
 	}
 
-	result, _, err := RunImport(context.Background(), api, meta, "results.zip")
+	result, _, err := send.RunImport(context.Background(), api, meta, "results.zip")
 	require.NoError(t, err, "expected time-window recovery")
 	require.Equal(t, "recent-uuid", result.LaunchUUID, "expected recent launch uuid")
 }
@@ -139,7 +140,7 @@ func TestRunImport_504RecoveryTimeWindowFallback(t *testing.T) {
 func TestRunImport_504RecoveryRejectsStaleLaunch(t *testing.T) {
 	t.Parallel()
 
-	meta := &Metadata{
+	meta := &send.Metadata{
 		HostnameURL: "https://rp.example.com/",
 		Project:     "demo",
 		LaunchName:  "launch",
@@ -154,10 +155,10 @@ func TestRunImport_504RecoveryRejectsStaleLaunch(t *testing.T) {
 	}}
 
 	api := &fakeImportAPI{
-		importErr: &GatewayTimeoutError{Err: errors.New("HTTP 504 Gateway Timeout")},
+		importErr: &send.GatewayTimeoutError{Err: errors.New("HTTP 504 Gateway Timeout")},
 		latest:    &types.PageLaunchResource{Content: &launches},
 	}
 
-	_, _, err := RunImport(context.Background(), api, meta, "results.zip")
+	_, _, err := send.RunImport(context.Background(), api, meta, "results.zip")
 	require.Error(t, err, "expected stale launch rejection")
 }

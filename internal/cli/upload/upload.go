@@ -44,6 +44,7 @@ func newUploadCommand() *cobra.Command {
 			}
 
 			logger := core.LoggerFromCmd(cmd)
+
 			result, err := rpuupload.Run(context.Background(), cfg, logger)
 			if err != nil {
 				return core.PrintAndReturnError(printer, err)
@@ -53,7 +54,8 @@ func newUploadCommand() *cobra.Command {
 				printer.PrintWarning(warning)
 			}
 
-			if printerErr := printer.Print(result, nil, nil); printerErr != nil {
+			printerErr := printer.Print(result, nil, nil)
+			if printerErr != nil {
 				return core.PrintAndReturnError(printer, printerErr)
 			}
 

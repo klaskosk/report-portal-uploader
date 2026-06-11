@@ -1,10 +1,11 @@
-package send
+package send_test
 
 import (
 	"context"
 	"testing"
 
 	"github.com/klaskosk/report-portal-cli/pkg/types"
+	"github.com/klaskosk/report-portal-uploader/internal/send"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,9 +22,9 @@ func (fake *fakePostImportAPI) ListLaunchItems(
 ) ([]types.TestItemResource, error) {
 	out := make([]types.TestItemResource, len(fake.items))
 	for i, item := range fake.items {
-		copy := item
-		copy.Parent = nil
-		out[i] = copy
+		itemCopy := item
+		itemCopy.Parent = nil
+		out[i] = itemCopy
 	}
 
 	return out, nil
@@ -35,6 +36,7 @@ func (fake *fakePostImportAPI) ListChildItems(
 	_, parentID int64,
 ) ([]types.TestItemResource, error) {
 	var out []types.TestItemResource
+
 	for _, item := range fake.items {
 		if item.Parent != nil && *item.Parent == parentID {
 			out = append(out, item)
@@ -48,7 +50,7 @@ func (fake *fakePostImportAPI) UpdateItemAttributes(
 	_ context.Context,
 	_ string,
 	itemID int64,
-	_ []LaunchAttribute,
+	_ []send.LaunchAttribute,
 ) error {
 	fake.updated = append(fake.updated, itemID)
 
@@ -78,31 +80,31 @@ func TestRunPostImport_matchesNestedTree(t *testing.T) {
 	itemName := "tc"
 	itemType := "TEST"
 
-	meta := &Metadata{Project: "demo"}
-	importResult := ImportResult{LaunchID: 10, LaunchUUID: "launch-uuid"}
+	meta := &send.Metadata{Project: "demo"}
+	importResult := send.ImportResult{LaunchID: 10, LaunchUUID: "launch-uuid"}
 
-	index := TestCaseIndex{Roots: []*TestItem{{
+	index := send.TestCaseIndex{Roots: []*send.TestItem{{
 		Name: "Sample",
-		Type: testItemTypeSuite,
-		Children: []*TestItem{{
+		Type: "TEST",
+		Children: []*send.TestItem{{
 			Name: "Outer",
-			Type: testItemTypeSuite,
-			Children: []*TestItem{{
-				Name:       "tc",
-				Type:       testItemTypeCase,
-				Properties: []LaunchAttribute{{Key: "ci-lane", Value: "main"}},
+			Type: "TEST",
+			Children: []*send.TestItem{{
+				Name:        "tc",
+				Type:        "STEP",
+				Properties:  []send.LaunchAttribute{{Key: "ci-lane", Value: "main"}},
 				Attachments: []string{"a/log.txt"},
 			}},
 		}},
 	}}}
 
 	api := &fakePostImportAPI{items: []types.TestItemResource{
-		{Id: &rootID, Name: &rootName, Type: strPtr("SUITE")},
-		{Id: &suiteID, Parent: &rootID, Name: &suiteName, Type: strPtr("SUITE")},
+		{Id: &rootID, Name: &rootName, Type: new("SUITE")},
+		{Id: &suiteID, Parent: &rootID, Name: &suiteName, Type: new("SUITE")},
 		{Id: &itemID, Parent: &suiteID, Name: &itemName, Uuid: &itemUUID, Type: &itemType},
 	}}
 
-	warnings, err := RunPostImport(context.Background(), api, meta, importResult, index, "")
+	warnings, err := send.RunPostImport(context.Background(), api, meta, importResult, index, "")
 	require.NoError(t, err, "expected post-import success")
 	require.Empty(t, warnings, "expected no matching warnings")
 	require.Equal(t, []int64{3}, api.updated, "expected item update")
@@ -118,25 +120,25 @@ func TestRunPostImport_matchesGinkgoStyleFlatSuite(t *testing.T) {
 	stepName := "[It] verifies stability under load [stability, 10001, test_id:10001]"
 	stepType := "TEST"
 
-	meta := &Metadata{Project: "demo"}
-	importResult := ImportResult{LaunchID: 20, LaunchUUID: "launch-uuid"}
+	meta := &send.Metadata{Project: "demo"}
+	importResult := send.ImportResult{LaunchID: 20, LaunchUUID: "launch-uuid"}
 
-	index := TestCaseIndex{Roots: []*TestItem{{
+	index := send.TestCaseIndex{Roots: []*send.TestItem{{
 		Name: "Example Ginkgo Suite",
-		Type: testItemTypeSuite,
-		Children: []*TestItem{{
+		Type: "TEST",
+		Children: []*send.TestItem{{
 			Name:       stepName,
-			Type:       testItemTypeCase,
-			Properties: []LaunchAttribute{{Key: "inventory-testcase-id", Value: "10001"}},
+			Type:       "STEP",
+			Properties: []send.LaunchAttribute{{Key: "inventory-testcase-id", Value: "10001"}},
 		}},
 	}}}
 
 	api := &fakePostImportAPI{items: []types.TestItemResource{
-		{Id: &suiteID, Name: &suiteName, Type: strPtr("SUITE")},
+		{Id: &suiteID, Name: &suiteName, Type: new("SUITE")},
 		{Id: &stepID, Parent: &suiteID, Name: &stepName, Uuid: &stepUUID, Type: &stepType},
 	}}
 
-	warnings, err := RunPostImport(context.Background(), api, meta, importResult, index, "")
+	warnings, err := send.RunPostImport(context.Background(), api, meta, importResult, index, "")
 	require.NoError(t, err, "expected post-import success")
 	require.Empty(t, warnings, "expected no matching warnings")
 	require.Equal(t, []int64{11}, api.updated, "expected step item update")
@@ -155,40 +157,52 @@ func TestRunPostImport_duplicateSuiteNamesUseIndex(t *testing.T) {
 	stepName := "same"
 	stepType := "TEST"
 
-	meta := &Metadata{Project: "demo"}
-	importResult := ImportResult{LaunchID: 30, LaunchUUID: "launch-uuid"}
+	meta := &send.Metadata{Project: "demo"}
+	importResult := send.ImportResult{LaunchID: 30, LaunchUUID: "launch-uuid"}
 
-	index := TestCaseIndex{Roots: []*TestItem{
+	index := send.TestCaseIndex{Roots: []*send.TestItem{
 		{
 			Name:  "S",
-			Type:  testItemTypeSuite,
+			Type:  "TEST",
 			Index: 0,
-			Children: []*TestItem{{
+			Children: []*send.TestItem{{
 				Name:       "same",
-				Type:       testItemTypeCase,
-				Properties: []LaunchAttribute{{Key: "ci-lane", Value: "first"}},
+				Type:       "STEP",
+				Properties: []send.LaunchAttribute{{Key: "ci-lane", Value: "first"}},
 			}},
 		},
 		{
 			Name:  "S",
-			Type:  testItemTypeSuite,
+			Type:  "TEST",
 			Index: 1,
-			Children: []*TestItem{{
+			Children: []*send.TestItem{{
 				Name:       "same",
-				Type:       testItemTypeCase,
-				Properties: []LaunchAttribute{{Key: "ci-lane", Value: "second"}},
+				Type:       "STEP",
+				Properties: []send.LaunchAttribute{{Key: "ci-lane", Value: "second"}},
 			}},
 		},
 	}}
 
 	api := &fakePostImportAPI{items: []types.TestItemResource{
-		{Id: &firstSuiteID, Name: &suiteName, Type: strPtr("SUITE")},
-		{Id: &firstStepID, Parent: &firstSuiteID, Name: &stepName, Uuid: &firstStepUUID, Type: &stepType},
-		{Id: &secondSuiteID, Name: &suiteName, Type: strPtr("SUITE")},
-		{Id: &secondStepID, Parent: &secondSuiteID, Name: &stepName, Uuid: &secondStepUUID, Type: &stepType},
+		{Id: &firstSuiteID, Name: &suiteName, Type: new("SUITE")},
+		{
+			Id:     &firstStepID,
+			Parent: &firstSuiteID,
+			Name:   &stepName,
+			Uuid:   &firstStepUUID,
+			Type:   &stepType,
+		},
+		{Id: &secondSuiteID, Name: &suiteName, Type: new("SUITE")},
+		{
+			Id:     &secondStepID,
+			Parent: &secondSuiteID,
+			Name:   &stepName,
+			Uuid:   &secondStepUUID,
+			Type:   &stepType,
+		},
 	}}
 
-	warnings, err := RunPostImport(context.Background(), api, meta, importResult, index, "")
+	warnings, err := send.RunPostImport(context.Background(), api, meta, importResult, index, "")
 	require.NoError(t, err, "expected post-import success")
 	require.Empty(t, warnings, "expected no matching warnings")
 	require.ElementsMatch(t, []int64{3, 4}, api.updated, "expected both suite steps updated")
@@ -204,25 +218,25 @@ func TestRunPostImport_matchesChildrenWithoutParentInListResponse(t *testing.T) 
 	stepName := "[It] verifies stability under load [stability, 10001, test_id:10001]"
 	stepType := "TEST"
 
-	meta := &Metadata{Project: "demo"}
-	importResult := ImportResult{LaunchID: 40, LaunchUUID: "launch-uuid"}
+	meta := &send.Metadata{Project: "demo"}
+	importResult := send.ImportResult{LaunchID: 40, LaunchUUID: "launch-uuid"}
 
-	index := TestCaseIndex{Roots: []*TestItem{{
+	index := send.TestCaseIndex{Roots: []*send.TestItem{{
 		Name: "Example Ginkgo Suite",
-		Type: testItemTypeSuite,
-		Children: []*TestItem{{
+		Type: "TEST",
+		Children: []*send.TestItem{{
 			Name:       stepName,
-			Type:       testItemTypeCase,
-			Properties: []LaunchAttribute{{Key: "inventory-testcase-id", Value: "INV-10001"}},
+			Type:       "STEP",
+			Properties: []send.LaunchAttribute{{Key: "inventory-testcase-id", Value: "INV-10001"}},
 		}},
 	}}}
 
 	api := &fakePostImportAPI{items: []types.TestItemResource{
-		{Id: &suiteID, Name: &suiteName, Type: strPtr("SUITE")},
+		{Id: &suiteID, Name: &suiteName, Type: new("SUITE")},
 		{Id: &stepID, Parent: &suiteID, Name: &stepName, Uuid: &stepUUID, Type: &stepType},
 	}}
 
-	warnings, err := RunPostImport(context.Background(), api, meta, importResult, index, "")
+	warnings, err := send.RunPostImport(context.Background(), api, meta, importResult, index, "")
 	require.NoError(t, err, "expected post-import success")
 	require.Empty(t, warnings, "expected no matching warnings")
 	require.Equal(t, []int64{11}, api.updated, "expected step item update")
@@ -231,15 +245,18 @@ func TestRunPostImport_matchesChildrenWithoutParentInListResponse(t *testing.T) 
 func TestRunPostImport_skippedWhenDisabled(t *testing.T) {
 	t.Parallel()
 
-	meta := &Metadata{DisableTestItemUpdater: true}
+	meta := &send.Metadata{DisableTestItemUpdater: true}
 	api := &fakePostImportAPI{}
 
-	warnings, err := RunPostImport(context.Background(), api, meta, ImportResult{}, TestCaseIndex{}, "")
+	warnings, err := send.RunPostImport(
+		context.Background(),
+		api,
+		meta,
+		send.ImportResult{},
+		send.TestCaseIndex{},
+		"",
+	)
 	require.NoError(t, err, "expected disabled updater to no-op")
 	require.Nil(t, warnings, "expected no warnings")
 	require.Empty(t, api.updated, "expected no updates")
-}
-
-func strPtr(value string) *string {
-	return &value
 }

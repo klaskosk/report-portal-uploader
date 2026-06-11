@@ -1,16 +1,19 @@
-package cli
+package cli_test
 
 import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/klaskosk/report-portal-uploader/internal/cli"
 )
 
-func TestExecute_rejectsWaitFlag(t *testing.T) {
+func TestExecute_rejectsUnknownWaitFlag(t *testing.T) {
 	t.Parallel()
 
 	var errOut bytes.Buffer
-	err := execute([]string{
+
+	err := cli.ExecuteWithArgs([]string{
 		"send",
 		"--metadata", "m.json",
 		"--results", "r.xml",
@@ -24,16 +27,14 @@ func TestExecute_rejectsWaitFlag(t *testing.T) {
 	if !strings.Contains(combined, "--wait") {
 		t.Fatalf("expected --wait in error, got: %s", combined)
 	}
-	if !strings.Contains(combined, "synchronous") {
-		t.Fatalf("expected migration hint about synchronous upload, got: %s", combined)
-	}
 }
 
-func TestExecute_rejectsURLFlag(t *testing.T) {
+func TestExecute_rejectsUnknownURLFlag(t *testing.T) {
 	t.Parallel()
 
 	var errOut bytes.Buffer
-	err := execute([]string{
+
+	err := cli.ExecuteWithArgs([]string{
 		"send",
 		"--metadata", "m.json",
 		"--results", "r.xml",
@@ -46,8 +47,5 @@ func TestExecute_rejectsURLFlag(t *testing.T) {
 	combined := err.Error() + errOut.String()
 	if !strings.Contains(combined, "--url") {
 		t.Fatalf("expected --url in error, got: %s", combined)
-	}
-	if !strings.Contains(combined, "REPORTPORTAL_TOKEN") {
-		t.Fatalf("expected token migration hint, got: %s", combined)
 	}
 }

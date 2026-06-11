@@ -1,6 +1,8 @@
 package send
 
 const (
-	launchRequestIDAttrKey = "rpu-req-id"
-	defaultLaunchName      = "rpu uploaded test result"
+	// LaunchRequestIDAttrKey is the launch attribute used to correlate import requests.
+	LaunchRequestIDAttrKey = "rpu-req-id"
+	// DefaultLaunchName is used when metadata omits launch.name.
+	DefaultLaunchName = "rpu uploaded test result"
 )

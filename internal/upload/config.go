@@ -1,17 +1,19 @@
 package upload
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/BurntSushi/toml"
 )
 
 const (
-	defaultLaneProperty    = "ci-lane"
-	defaultExcludePattern  = "*report_testrun*"
+	defaultLaneProperty   = "ci-lane"
+	defaultExcludePattern = "*report_testrun*"
 )
 
 // Config is the TOML configuration for rpu upload.
@@ -69,13 +71,18 @@ func ParseConfigFile(path string) (*Config, error) {
 	case "-":
 		reader = os.Stdin
 	case "":
-		return nil, fmt.Errorf("--config is required")
+		return nil, errors.New("--config is required")
 	default:
-		file, err := os.Open(path)
+		err := validateCLIPath(path)
 		if err != nil {
 			return nil, fmt.Errorf("opening config %q: %w", path, err)
 		}
-		defer file.Close()
+
+		file, err := os.Open(path) //nolint:gosec // path validated above
+		if err != nil {
+			return nil, fmt.Errorf("opening config %q: %w", path, err)
+		}
+		defer func() { _ = file.Close() }()
 
 		reader = file
 	}
@@ -86,6 +93,7 @@ func ParseConfigFile(path string) (*Config, error) {
 // ParseConfig decodes and validates TOML from reader.
 func ParseConfig(reader io.Reader) (*Config, error) {
 	var cfg Config
+
 	_, err := toml.NewDecoder(reader).Decode(&cfg)
 	if err != nil {
 		return nil, fmt.Errorf("parsing config TOML: %w", err)
@@ -97,7 +105,7 @@ func ParseConfig(reader io.Reader) (*Config, error) {
 // ValidateConfig applies defaults and validates a decoded config.
 func ValidateConfig(cfg *Config) (*Config, error) {
 	if cfg == nil {
-		return nil, fmt.Errorf("config is nil")
+		return nil, errors.New("config is nil")
 	}
 
 	cfg.ReportPortal.Hostname = strings.TrimSpace(cfg.ReportPortal.Hostname)
@@ -105,19 +113,19 @@ func ValidateConfig(cfg *Config) (*Config, error) {
 	cfg.Launch.Name = strings.TrimSpace(cfg.Launch.Name)
 
 	if cfg.ReportPortal.Hostname == "" {
-		return nil, fmt.Errorf("report_portal.hostname is required")
+		return nil, errors.New("report_portal.hostname is required")
 	}
 
 	if cfg.ReportPortal.Project == "" {
-		return nil, fmt.Errorf("report_portal.project is required")
+		return nil, errors.New("report_portal.project is required")
 	}
 
 	if cfg.Launch.Name == "" {
-		return nil, fmt.Errorf("launch.name is required")
+		return nil, errors.New("launch.name is required")
 	}
 
 	if len(cfg.Sources) == 0 {
-		return nil, fmt.Errorf("at least one [[sources]] entry is required")
+		return nil, errors.New("at least one [[sources]] entry is required")
 	}
 
 	for i, source := range cfg.Sources {
@@ -139,8 +147,18 @@ func ValidateConfig(cfg *Config) (*Config, error) {
 
 // EffectivePropertyFilter returns lane_property plus any extra property_filter patterns.
 func (cfg *Config) EffectivePropertyFilter() []string {
-	filter := []string{cfg.Processing.LaneProperty}
+	filter := make([]string, 0, 1+len(cfg.Processing.PropertyFilter))
+	filter = append(filter, cfg.Processing.LaneProperty)
 	filter = append(filter, cfg.Processing.PropertyFilter...)
 
 	return filter
+}
+
+func validateCLIPath(path string) error {
+	clean := filepath.Clean(path)
+	if strings.Contains(clean, "..") {
+		return fmt.Errorf("invalid path %q", path)
+	}
+
+	return nil
 }

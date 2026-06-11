@@ -1,6 +1,7 @@
 package upload
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ type SourceFile struct {
 // ExpandSources expands each [[sources]] path with filepath.Glob.
 func ExpandSources(sources []SourceConfig) ([]SourceFile, error) {
 	var records []SourceFile
+
 	index := 0
 
 	for sourceIndex, source := range sources {
@@ -60,7 +62,7 @@ func ExpandSources(sources []SourceConfig) ([]SourceFile, error) {
 	}
 
 	if len(records) == 0 {
-		return nil, fmt.Errorf("no source files matched [[sources]] entries")
+		return nil, errors.New("no source files matched [[sources]] entries")
 	}
 
 	return records, nil

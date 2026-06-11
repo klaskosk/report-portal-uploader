@@ -3,6 +3,7 @@ package upload
 import (
 	"bytes"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -19,10 +20,10 @@ const (
 	xmlProperty  = "property"
 )
 
-type xunitNode struct {
+type xUnitNode struct {
 	Name     xml.Name
 	Attrs    []xml.Attr
-	Children []*xunitNode
+	Children []*xUnitNode
 	Chars    string
 	Skip     bool
 }
@@ -48,7 +49,10 @@ func ShouldExclude(basename string, patterns []string) bool {
 }
 
 // ApplyLayer2Transforms runs the Layer 2 XML transform chain on input bytes.
-func ApplyLayer2Transforms(input []byte, opts TransformOptions) ([]byte, rpusend.WarningList, error) {
+func ApplyLayer2Transforms(
+	input []byte,
+	opts TransformOptions,
+) ([]byte, rpusend.WarningList, error) {
 	doc, err := parseXUnitDocument(input)
 	if err != nil {
 		return nil, nil, err
@@ -76,7 +80,7 @@ func WorkdirName(source SourceFile) string {
 	return fmt.Sprintf("%d_%s_%s", source.Index, shortID, filepath.Base(source.Path))
 }
 
-func sanitizeSystemOutErr(node *xunitNode) {
+func sanitizeSystemOutErr(node *xUnitNode) {
 	if node == nil || node.Skip {
 		return
 	}
@@ -101,6 +105,7 @@ func sanitizeSystemText(text string) string {
 
 	for {
 		updated := strings.ReplaceAll(text, "<<<<", "<<")
+
 		updated = strings.ReplaceAll(updated, ">>>>", ">>")
 		if updated == text {
 			break
@@ -110,6 +115,7 @@ func sanitizeSystemText(text string) string {
 	}
 
 	var builder strings.Builder
+
 	for _, r := range text {
 		if r == '<' || r == '>' {
 			continue
@@ -121,7 +127,7 @@ func sanitizeSystemText(text string) string {
 	return builder.String()
 }
 
-func applyLaneLabeling(node *xunitNode, lane, laneProperty string) {
+func applyLaneLabeling(node *xUnitNode, lane, laneProperty string) {
 	if lane == "" {
 		return
 	}
@@ -129,13 +135,14 @@ func applyLaneLabeling(node *xunitNode, lane, laneProperty string) {
 	applyLaneLabelingWalk(node, lane, laneProperty)
 }
 
-func applyLaneLabelingWalk(node *xunitNode, lane, laneProperty string) {
+func applyLaneLabelingWalk(node *xUnitNode, lane, laneProperty string) {
 	if node == nil || node.Skip {
 		return
 	}
 
 	if node.Name.Local == xmlTestsuite {
 		name := attrValue(node.Attrs, "name")
+
 		prefix := "[" + lane + "] "
 		if name != "" && !strings.HasPrefix(name, prefix) {
 			setAttr(node, "name", prefix+name)
@@ -149,7 +156,7 @@ func applyLaneLabelingWalk(node *xunitNode, lane, laneProperty string) {
 	}
 }
 
-func moveAttributesToProperties(node *xunitNode) {
+func moveAttributesToProperties(node *xUnitNode) {
 	if node == nil || node.Skip {
 		return
 	}
@@ -161,7 +168,7 @@ func moveAttributesToProperties(node *xunitNode) {
 	}
 }
 
-func moveAttributesToPropertiesWalk(node *xunitNode) {
+func moveAttributesToPropertiesWalk(node *xUnitNode) {
 	switch node.Name.Local {
 	case xmlTestcase:
 		if value := attrValue(node.Attrs, "status"); value != "" {
@@ -178,35 +185,18 @@ func moveAttributesToPropertiesWalk(node *xunitNode) {
 	hoistResultChildren(node)
 }
 
-func hoistResultChildren(node *xunitNode) {
+func hoistResultChildren(node *xUnitNode) {
 	if node == nil {
 		return
 	}
 
-	remaining := make([]*xunitNode, 0, len(node.Children))
+	remaining := make([]*xUnitNode, 0, len(node.Children))
 	for _, child := range node.Children {
 		if child == nil || child.Skip {
 			continue
 		}
 
-		switch child.Name.Local {
-		case "results_directory", "results_summary":
-			value := strings.TrimSpace(child.Chars)
-			if value == "" {
-				for _, grandchild := range child.Children {
-					if grandchild != nil && !grandchild.Skip {
-						value = strings.TrimSpace(grandchild.Chars)
-						if value != "" {
-							break
-						}
-					}
-				}
-			}
-
-			if value != "" {
-				ensureProperty(node, child.Name.Local, value)
-			}
-
+		if hoistResultChild(node, child) {
 			continue
 		}
 
@@ -216,7 +206,41 @@ func hoistResultChildren(node *xunitNode) {
 	node.Children = remaining
 }
 
-func normalizeTimeAttributes(node *xunitNode, sourcePath string, warnings *rpusend.WarningList) {
+func hoistResultChild(parent, child *xUnitNode) bool {
+	switch child.Name.Local {
+	case "results_directory", "results_summary":
+		value := resultChildValue(child)
+		if value != "" {
+			ensureProperty(parent, child.Name.Local, value)
+		}
+
+		return true
+	default:
+		return false
+	}
+}
+
+func resultChildValue(child *xUnitNode) string {
+	value := strings.TrimSpace(child.Chars)
+	if value != "" {
+		return value
+	}
+
+	for _, grandchild := range child.Children {
+		if grandchild == nil || grandchild.Skip {
+			continue
+		}
+
+		value = strings.TrimSpace(grandchild.Chars)
+		if value != "" {
+			return value
+		}
+	}
+
+	return ""
+}
+
+func normalizeTimeAttributes(node *xUnitNode, sourcePath string, warnings *rpusend.WarningList) {
 	if node == nil || node.Skip {
 		return
 	}
@@ -227,7 +251,8 @@ func normalizeTimeAttributes(node *xunitNode, sourcePath string, warnings *rpuse
 			return
 		}
 
-		if _, err := strconv.ParseFloat(strings.ReplaceAll(timeValue, ",", ""), 64); err != nil {
+		_, err := strconv.ParseFloat(strings.ReplaceAll(timeValue, ",", ""), 64)
+		if err != nil {
 			setAttr(node, "time", "0.0")
 			elementPath := elementPathForNode(node)
 			warnings.Add(
@@ -247,7 +272,7 @@ func normalizeTimeAttributes(node *xunitNode, sourcePath string, warnings *rpuse
 	}
 }
 
-func elementPathForNode(node *xunitNode) string {
+func elementPathForNode(node *xUnitNode) string {
 	if node == nil {
 		return ""
 	}
@@ -260,7 +285,7 @@ func elementPathForNode(node *xunitNode) string {
 	return node.Name.Local + "[@name=" + name + "]"
 }
 
-func ensureProperty(node *xunitNode, name, value string) {
+func ensureProperty(node *xUnitNode, name, value string) {
 	properties := findOrCreateProperties(node)
 	for _, child := range properties.Children {
 		if child != nil && !child.Skip && child.Name.Local == xmlProperty {
@@ -272,7 +297,7 @@ func ensureProperty(node *xunitNode, name, value string) {
 		}
 	}
 
-	properties.Children = append(properties.Children, &xunitNode{
+	properties.Children = append(properties.Children, &xUnitNode{
 		Name: xml.Name{Local: xmlProperty},
 		Attrs: []xml.Attr{
 			{Name: xml.Name{Local: "name"}, Value: name},
@@ -281,28 +306,30 @@ func ensureProperty(node *xunitNode, name, value string) {
 	})
 }
 
-func findOrCreateProperties(node *xunitNode) *xunitNode {
+func findOrCreateProperties(node *xUnitNode) *xUnitNode {
 	for _, child := range node.Children {
 		if child != nil && !child.Skip && child.Name.Local == "properties" {
 			return child
 		}
 	}
 
-	properties := &xunitNode{Name: xml.Name{Local: "properties"}}
+	properties := &xUnitNode{Name: xml.Name{Local: "properties"}}
 	node.Children = append(node.Children, properties)
 
 	return properties
 }
 
-func parseXUnitDocument(input []byte) (*xunitNode, error) {
+func parseXUnitDocument(input []byte) (*xUnitNode, error) {
 	decoder := xml.NewDecoder(bytes.NewReader(input))
 
-	var root *xunitNode
-	var stack []*xunitNode
+	var (
+		root  *xUnitNode
+		stack []*xUnitNode
+	)
 
 	for {
 		token, err := decoder.Token()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 
@@ -310,36 +337,46 @@ func parseXUnitDocument(input []byte) (*xunitNode, error) {
 			return nil, fmt.Errorf("parsing XML: %w", err)
 		}
 
-		switch element := token.(type) {
-		case xml.StartElement:
-			node := &xunitNode{Name: element.Name, Attrs: append([]xml.Attr{}, element.Attr...)}
-			if len(stack) == 0 {
-				root = node
-			} else {
-				parent := stack[len(stack)-1]
-				parent.Children = append(parent.Children, node)
-			}
-
-			stack = append(stack, node)
-		case xml.EndElement:
-			if len(stack) > 0 {
-				stack = stack[:len(stack)-1]
-			}
-		case xml.CharData:
-			if len(stack) > 0 {
-				stack[len(stack)-1].Chars += string(element)
-			}
-		}
+		root, stack = appendXUnitToken(root, stack, token)
 	}
 
 	if root == nil {
-		return nil, fmt.Errorf("empty XML document")
+		return nil, errors.New("empty XML document")
 	}
 
 	return root, nil
 }
 
-func encodeXUnitDocument(root *xunitNode) ([]byte, error) {
+func appendXUnitToken(
+	root *xUnitNode,
+	stack []*xUnitNode,
+	token xml.Token,
+) (*xUnitNode, []*xUnitNode) {
+	switch element := token.(type) {
+	case xml.StartElement:
+		node := &xUnitNode{Name: element.Name, Attrs: append([]xml.Attr{}, element.Attr...)}
+		if len(stack) == 0 {
+			root = node
+		} else {
+			parent := stack[len(stack)-1]
+			parent.Children = append(parent.Children, node)
+		}
+
+		return root, append(stack, node)
+	case xml.EndElement:
+		if len(stack) > 0 {
+			stack = stack[:len(stack)-1]
+		}
+	case xml.CharData:
+		if len(stack) > 0 {
+			stack[len(stack)-1].Chars += string(element)
+		}
+	}
+
+	return root, stack
+}
+
+func encodeXUnitDocument(root *xUnitNode) ([]byte, error) {
 	var buf bytes.Buffer
 	buf.WriteString(xml.Header)
 
@@ -359,22 +396,23 @@ func encodeXUnitDocument(root *xunitNode) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func writeNode(encoder *xml.Encoder, node *xunitNode) error {
+func writeNode(encoder *xml.Encoder, node *xUnitNode) error {
 	if node.Skip {
 		return nil
 	}
 
 	start := xml.StartElement{Name: node.Name, Attr: node.Attrs}
+
 	err := encoder.EncodeToken(start)
 	if err != nil {
-		return err
+		return fmt.Errorf("encoding XML start element: %w", err)
 	}
 
 	chars := strings.TrimSpace(node.Chars)
 	if chars != "" {
 		err = encoder.EncodeToken(xml.CharData(chars))
 		if err != nil {
-			return err
+			return fmt.Errorf("encoding XML character data: %w", err)
 		}
 	}
 
@@ -385,7 +423,12 @@ func writeNode(encoder *xml.Encoder, node *xunitNode) error {
 		}
 	}
 
-	return encoder.EncodeToken(start.End())
+	err = encoder.EncodeToken(start.End())
+	if err != nil {
+		return fmt.Errorf("encoding XML end element: %w", err)
+	}
+
+	return nil
 }
 
 func attrValue(attrs []xml.Attr, name string) string {
@@ -398,7 +441,7 @@ func attrValue(attrs []xml.Attr, name string) string {
 	return ""
 }
 
-func setAttr(node *xunitNode, name, value string) {
+func setAttr(node *xUnitNode, name, value string) {
 	for i, attr := range node.Attrs {
 		if attr.Name.Local == name {
 			node.Attrs[i].Value = value

@@ -1,9 +1,10 @@
-package upload
+package upload_test
 
 import (
 	"strings"
 	"testing"
 
+	"github.com/klaskosk/report-portal-uploader/internal/upload"
 	"github.com/stretchr/testify/require"
 )
 
@@ -85,21 +86,36 @@ path = "a.xml"
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			cfg, err := ParseConfig(strings.NewReader(tc.input))
-			if tc.wantErr != "" {
+			cfg, err := upload.ParseConfig(strings.NewReader(testCase.input))
+			if testCase.wantErr != "" {
 				require.Error(t, err, "expected parse error")
-				require.Contains(t, err.Error(), tc.wantErr, "expected specific validation error")
+				require.Contains(
+					t,
+					err.Error(),
+					testCase.wantErr,
+					"expected specific validation error",
+				)
 
 				return
 			}
 
 			require.NoError(t, err, "expected config parse to succeed")
-			require.Equal(t, defaultLaneProperty, cfg.Processing.LaneProperty, "expected default lane property")
-			require.Equal(t, []string{defaultExcludePattern}, cfg.Processing.ExcludePatterns, "expected default exclude pattern")
+			require.Equal(
+				t,
+				"ci-lane",
+				cfg.Processing.LaneProperty,
+				"expected default lane property",
+			)
+			require.Equal(
+				t,
+				[]string{"*report_testrun*"},
+				cfg.Processing.ExcludePatterns,
+				"expected default exclude pattern",
+			)
 		})
 	}
 }
@@ -107,8 +123,8 @@ path = "a.xml"
 func TestConfig_EffectivePropertyFilter(t *testing.T) {
 	t.Parallel()
 
-	cfg := &Config{
-		Processing: ProcessingConfig{
+	cfg := &upload.Config{
+		Processing: upload.ProcessingConfig{
 			LaneProperty:   "suite-group",
 			PropertyFilter: []string{"inventory-.*"},
 		},

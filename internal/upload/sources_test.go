@@ -1,10 +1,11 @@
-package upload
+package upload_test
 
 import (
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/klaskosk/report-portal-uploader/internal/upload"
 	"github.com/stretchr/testify/require"
 )
 
@@ -14,10 +15,19 @@ func TestExpandSources_literalAndGlob(t *testing.T) {
 	dir := t.TempDir()
 	fileA := filepath.Join(dir, "a.xml")
 	fileB := filepath.Join(dir, "b.xml")
-	require.NoError(t, os.WriteFile(fileA, []byte("<testsuites/>"), 0o644), "expected fixture write")
-	require.NoError(t, os.WriteFile(fileB, []byte("<testsuites/>"), 0o644), "expected fixture write")
 
-	records, err := ExpandSources([]SourceConfig{
+	require.NoError(
+		t,
+		os.WriteFile(fileA, []byte("<testsuites/>"), 0o600),
+		"expected fixture write",
+	)
+	require.NoError(
+		t,
+		os.WriteFile(fileB, []byte("<testsuites/>"), 0o600),
+		"expected fixture write",
+	)
+
+	records, err := upload.ExpandSources([]upload.SourceConfig{
 		{Path: fileA, Lane: "gm"},
 		{Path: filepath.Join(dir, "*.xml"), Lane: "shared"},
 	})
@@ -32,7 +42,7 @@ func TestExpandSources_literalAndGlob(t *testing.T) {
 func TestExpandSources_zeroMatchesError(t *testing.T) {
 	t.Parallel()
 
-	_, err := ExpandSources([]SourceConfig{{Path: "*.missing.xml"}})
+	_, err := upload.ExpandSources([]upload.SourceConfig{{Path: "*.missing.xml"}})
 	require.Error(t, err, "expected zero-match error")
 	require.Contains(t, err.Error(), "matched no files", "expected glob miss message")
 }
@@ -42,9 +52,13 @@ func TestExpandSources_duplicatePathTwoRecords(t *testing.T) {
 
 	dir := t.TempDir()
 	filePath := filepath.Join(dir, "dup.xml")
-	require.NoError(t, os.WriteFile(filePath, []byte("<testsuites/>"), 0o644), "expected fixture write")
+	require.NoError(
+		t,
+		os.WriteFile(filePath, []byte("<testsuites/>"), 0o600),
+		"expected fixture write",
+	)
 
-	records, err := ExpandSources([]SourceConfig{
+	records, err := upload.ExpandSources([]upload.SourceConfig{
 		{Path: filePath, Lane: "lane-a"},
 		{Path: filePath, Lane: "lane-b"},
 	})

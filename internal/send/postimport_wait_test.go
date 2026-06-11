@@ -1,4 +1,4 @@
-package send
+package send_test
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/klaskosk/report-portal-cli/pkg/types"
+	"github.com/klaskosk/report-portal-uploader/internal/send"
 	"github.com/stretchr/testify/require"
 )
 
@@ -40,7 +41,7 @@ func (api *delayedPostImportAPI) UpdateItemAttributes(
 	_ context.Context,
 	_ string,
 	_ int64,
-	_ []LaunchAttribute,
+	_ []send.LaunchAttribute,
 ) error {
 	return nil
 }
@@ -72,7 +73,7 @@ func TestWaitForLaunchItems_waitsForExpectedCount(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	items, err := waitForLaunchItems(ctx, api, "demo", 1, 1)
+	items, err := send.WaitForLaunchItems(ctx, api, "demo", 1, 1)
 	require.NoError(t, err, "expected wait to succeed")
 	require.GreaterOrEqual(t, api.calls, 5, "expected polling until launch items stabilize")
 	require.Len(t, items, 2, "expected full launch item list")

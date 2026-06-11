@@ -13,10 +13,11 @@ import (
 
 // Execute runs the root command with arguments from os.Args.
 func Execute() error {
-	return execute(nil, os.Stderr)
+	return ExecuteWithArgs(nil, os.Stderr)
 }
 
-func execute(args []string, errOut io.Writer) error {
+// ExecuteWithArgs runs the root command with the given args and error output writer.
+func ExecuteWithArgs(args []string, errOut io.Writer) error {
 	cmd := newRootCmd()
 	if args != nil {
 		cmd.SetArgs(args)

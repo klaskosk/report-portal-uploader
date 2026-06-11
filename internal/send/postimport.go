@@ -17,8 +17,16 @@ const postImportConcurrency = 10
 
 // RPPostImportAPI abstracts post-import item and log operations.
 type RPPostImportAPI interface {
-	ListLaunchItems(ctx context.Context, project string, launchID int64) ([]types.TestItemResource, error)
-	ListChildItems(ctx context.Context, project string, launchID, parentID int64) ([]types.TestItemResource, error)
+	ListLaunchItems(
+		ctx context.Context,
+		project string,
+		launchID int64,
+	) ([]types.TestItemResource, error)
+	ListChildItems(
+		ctx context.Context,
+		project string,
+		launchID, parentID int64,
+	) ([]types.TestItemResource, error)
 	UpdateItemAttributes(
 		ctx context.Context,
 		project string,
@@ -46,7 +54,9 @@ func (api *ClientPostImportAPI) ListLaunchItems(
 	launchID int64,
 ) ([]types.TestItemResource, error) {
 	scope := api.Client.Project(project)
+
 	var all []types.TestItemResource
+
 	page := int32(0)
 	pageSize := int32(300)
 
@@ -84,7 +94,9 @@ func (api *ClientPostImportAPI) ListChildItems(
 	launchID, parentID int64,
 ) ([]types.TestItemResource, error) {
 	scope := api.Client.Project(project)
+
 	var all []types.TestItemResource
+
 	page := int32(0)
 	pageSize := int32(300)
 
@@ -159,6 +171,7 @@ func (api *ClientPostImportAPI) CreateAttachmentLogs(
 
 	entries := make([]log.BatchLogEntry, 0, len(attachments))
 	for _, relativePath := range attachments {
+		// #nosec G304 -- attachment path resolved from testcase metadata
 		data, err := os.ReadFile(filepath.Join(attachmentsDir, relativePath))
 		if err != nil {
 			return fmt.Errorf("reading attachment %q: %w", relativePath, err)
@@ -197,7 +210,13 @@ func RunPostImport(
 		return nil, nil
 	}
 
-	items, err := waitForLaunchItems(ctx, api, meta.Project, importResult.LaunchID, len(index.Steps()))
+	items, err := WaitForLaunchItems(
+		ctx,
+		api,
+		meta.Project,
+		importResult.LaunchID,
+		len(index.Steps()),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -207,64 +226,106 @@ func RunPostImport(
 	var warnings WarningList
 
 	resolveParentItemIDs(index.Roots, byName, &warnings)
+
 	err = resolveChildItemIDs(ctx, api, meta.Project, importResult.LaunchID, index.Roots)
 	if err != nil {
 		return warnings, err
 	}
 
 	work := collectUpdateWork(index.Roots, &warnings)
-
-	sem := make(chan struct{}, postImportConcurrency)
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-
-	for _, task := range work {
-		wg.Add(1)
-
-		go func(task *TestItem) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			if task.rpItemID == nil || task.rpItemUUID == nil {
-				mu.Lock()
-				warnings.Add("postprocess", fmt.Sprintf("Matched item for %s %q lacks id/uuid", task.Type, task.Name))
-				mu.Unlock()
-
-				return
-			}
-
-			err := api.UpdateItemAttributes(ctx, meta.Project, *task.rpItemID, task.Properties)
-			if err != nil {
-				mu.Lock()
-				warnings.Add("postprocess", err.Error())
-				mu.Unlock()
-
-				return
-			}
-
-			err = api.CreateAttachmentLogs(
-				ctx,
-				meta.Project,
-				importResult.LaunchUUID,
-				*task.rpItemUUID,
-				task.Attachments,
-				attachmentsDir,
-			)
-			if err != nil {
-				mu.Lock()
-				warnings.Add("postprocess", err.Error())
-				mu.Unlock()
-			}
-		}(task)
-	}
-
-	wg.Wait()
+	runPostImportUpdates(ctx, api, meta, importResult, attachmentsDir, work, &warnings)
 
 	return warnings, nil
 }
 
-func waitForLaunchItems(
+func runPostImportUpdates(
+	ctx context.Context,
+	api RPPostImportAPI,
+	meta *Metadata,
+	importResult ImportResult,
+	attachmentsDir string,
+	work []*TestItem,
+	warnings *WarningList,
+) {
+	sem := make(chan struct{}, postImportConcurrency)
+
+	var (
+		waitGroup sync.WaitGroup
+		mutex     sync.Mutex
+	)
+
+	for _, task := range work {
+		waitGroup.Add(1)
+
+		go func(task *TestItem) {
+			defer waitGroup.Done()
+
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			applyPostImportTask(
+				ctx,
+				api,
+				meta,
+				importResult,
+				attachmentsDir,
+				task,
+				warnings,
+				&mutex,
+			)
+		}(task)
+	}
+
+	waitGroup.Wait()
+}
+
+func applyPostImportTask(
+	ctx context.Context,
+	api RPPostImportAPI,
+	meta *Metadata,
+	importResult ImportResult,
+	attachmentsDir string,
+	task *TestItem,
+	warnings *WarningList,
+	mutex *sync.Mutex,
+) {
+	if task.rpItemID == nil || task.rpItemUUID == nil {
+		mutex.Lock()
+		warnings.Add(
+			"postprocess",
+			fmt.Sprintf("Matched item for %s %q lacks id/uuid", task.Type, task.Name),
+		)
+		mutex.Unlock()
+
+		return
+	}
+
+	err := api.UpdateItemAttributes(ctx, meta.Project, *task.rpItemID, task.Properties)
+	if err != nil {
+		mutex.Lock()
+		warnings.Add("postprocess", err.Error())
+		mutex.Unlock()
+
+		return
+	}
+
+	err = api.CreateAttachmentLogs(
+		ctx,
+		meta.Project,
+		importResult.LaunchUUID,
+		*task.rpItemUUID,
+		task.Attachments,
+		attachmentsDir,
+	)
+	if err != nil {
+		mutex.Lock()
+		warnings.Add("postprocess", err.Error())
+		mutex.Unlock()
+	}
+}
+
+// WaitForLaunchItems polls until launch items reach the expected count and stabilize.
+func WaitForLaunchItems(
 	ctx context.Context,
 	api RPPostImportAPI,
 	project string,
@@ -272,18 +333,20 @@ func waitForLaunchItems(
 	expectedTestItems int,
 ) ([]types.TestItemResource, error) {
 	deadline := time.Now().Add(2 * time.Minute)
+
 	target := expectedTestItems
 	if target == 0 {
 		target = 1
 	}
 
 	var lastCount int
+
 	stablePolls := 0
 
 	for {
 		items, err := api.ListLaunchItems(ctx, project, launchID)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("waiting for launch items: %w", err)
 		}
 
 		testCount := countLaunchTestItems(items)
@@ -304,7 +367,7 @@ func waitForLaunchItems(
 
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, fmt.Errorf("waiting for launch items: %w", ctx.Err())
 		case <-time.After(2 * time.Second):
 		}
 	}
@@ -312,6 +375,7 @@ func waitForLaunchItems(
 
 func countLaunchTestItems(items []types.TestItemResource) int {
 	count := 0
+
 	for _, item := range items {
 		if item.Type != nil && (*item.Type == "TEST" || *item.Type == "STEP") {
 			count++
@@ -334,8 +398,13 @@ func buildItemsByName(items []types.TestItemResource) map[string][]types.TestIte
 }
 
 // resolveParentItemIDs resolves TEST nodes by launch-wide name with index disambiguation.
-func resolveParentItemIDs(roots []*TestItem, byName map[string][]types.TestItemResource, warnings *WarningList) {
+func resolveParentItemIDs(
+	roots []*TestItem,
+	byName map[string][]types.TestItemResource,
+	warnings *WarningList,
+) {
 	var walk func([]*TestItem)
+
 	walk = func(nodes []*TestItem) {
 		for _, item := range nodes {
 			if item.Type == testItemTypeSuite {
@@ -358,12 +427,13 @@ func resolveChildItemIDs(
 	roots []*TestItem,
 ) error {
 	var walk func([]*TestItem) error
+
 	walk = func(nodes []*TestItem) error {
 		for _, item := range nodes {
 			if item.Type == testItemTypeSuite && item.rpItemID != nil {
 				rpChildren, err := api.ListChildItems(ctx, project, launchID, *item.rpItemID)
 				if err != nil {
-					return err
+					return fmt.Errorf("listing child items for %q: %w", item.Name, err)
 				}
 
 				for _, jsonChild := range item.Children {
@@ -377,7 +447,8 @@ func resolveChildItemIDs(
 				}
 			}
 
-			if err := walk(item.Children); err != nil {
+			err := walk(item.Children)
+			if err != nil {
 				return err
 			}
 		}
@@ -388,11 +459,18 @@ func resolveChildItemIDs(
 	return walk(roots)
 }
 
-func assignItemByName(item *TestItem, byName map[string][]types.TestItemResource, warnings *WarningList) {
+func assignItemByName(
+	item *TestItem,
+	byName map[string][]types.TestItemResource,
+	warnings *WarningList,
+) {
 	matches := byName[item.Name]
 	if len(matches) == 0 {
 		if itemNeedsUpdate(item) {
-			warnings.Add("postprocess", fmt.Sprintf("No Report Portal item matched %s %q", item.Type, item.Name))
+			warnings.Add(
+				"postprocess",
+				fmt.Sprintf("No Report Portal item matched %s %q", item.Type, item.Name),
+			)
 		}
 
 		return
@@ -425,11 +503,15 @@ func collectUpdateWork(roots []*TestItem, warnings *WarningList) []*TestItem {
 	var work []*TestItem
 
 	var walk func([]*TestItem)
+
 	walk = func(nodes []*TestItem) {
 		for _, item := range nodes {
 			if itemNeedsUpdate(item) {
 				if item.rpItemID == nil || item.rpItemUUID == nil {
-					warnings.Add("postprocess", fmt.Sprintf("No Report Portal item matched %s %q", item.Type, item.Name))
+					warnings.Add(
+						"postprocess",
+						fmt.Sprintf("No Report Portal item matched %s %q", item.Type, item.Name),
+					)
 				} else {
 					work = append(work, item)
 				}

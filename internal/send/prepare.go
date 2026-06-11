@@ -5,10 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -21,7 +23,7 @@ const (
 
 var (
 	doNotWarnEmptyValue = map[string]struct{}{
-		"line.separator": {},
+		"line.separator":  {},
 		"sun.cpu.isalist": {},
 	}
 	doNotWarnLongValue = map[string]struct{}{
@@ -62,6 +64,7 @@ func (index TestCaseIndex) Steps() []*TestItem {
 	var steps []*TestItem
 
 	var walk func([]*TestItem)
+
 	walk = func(nodes []*TestItem) {
 		for _, node := range nodes {
 			if node.Type == testItemTypeCase {
@@ -77,10 +80,10 @@ func (index TestCaseIndex) Steps() []*TestItem {
 	return steps
 }
 
-type xunitNode struct {
+type xUnitNode struct {
 	Name     xml.Name
 	Attrs    []xml.Attr
-	Children []*xunitNode
+	Children []*xUnitNode
 	Chars    string
 	Skip     bool
 }
@@ -107,13 +110,11 @@ func PrepareXML(input []byte, concatChar string) ([]byte, WarningList, error) {
 		applyConcatChar(doc, concatChar)
 	}
 
-	removed := removeEmptySuites(doc)
-	if removed {
-		removed = removeEmptySuites(doc)
+	for removeEmptySuites(doc) {
 	}
 
 	if !hasAnyTestcase(doc) {
-		return nil, warnings, fmt.Errorf("no valid testcases found in XML")
+		return nil, warnings, errors.New("no valid testcases found in XML")
 	}
 
 	output, err := encodeXUnitDocument(doc)
@@ -131,12 +132,14 @@ func BuildTestCaseIndex(
 	meta *Metadata,
 ) (TestCaseIndex, WarningList, error) {
 	var warnings WarningList
+
 	index := TestCaseIndex{}
 	indexes := map[string]int{}
 
 	for _, xmlPath := range xmlPaths {
 		basename := strings.TrimSuffix(filepath.Base(xmlPath), filepath.Ext(xmlPath))
 
+		// #nosec G304 -- xmlPath is a prepared artifact under workDir
 		content, err := os.ReadFile(xmlPath)
 		if err != nil {
 			return index, warnings, fmt.Errorf("reading %q: %w", xmlPath, err)
@@ -154,13 +157,14 @@ func BuildTestCaseIndex(
 }
 
 func collectItemProperties(
-	node *xunitNode,
+	node *xUnitNode,
 	item *TestItem,
 	xmlBasename, attachmentsDir string,
 	meta *Metadata,
 ) {
-	var walk func(*xunitNode)
-	walk = func(current *xunitNode) {
+	var walk func(*xUnitNode)
+
+	walk = func(current *xUnitNode) {
 		if current == nil || current.Skip {
 			return
 		}
@@ -213,70 +217,17 @@ func collectTestItemTree(
 		indexes = map[string]int{}
 	}
 
-	var buildItem func(node *xunitNode, parentName string) *TestItem
-	buildItem = func(node *xunitNode, parentName string) *TestItem {
-		if node == nil || node.Skip {
-			return nil
-		}
-
-		switch node.Name.Local {
-		case xmlTestsuite, xmlTestcase:
-		default:
-			return nil
-		}
-
-		name := attrValue(node.Attrs, "name")
-		className := attrValue(node.Attrs, "classname")
-		testCaseID := attrValue(node.Attrs, "id")
-
-		itemType := testItemTypeSuite
-		childParentName := parentName
-		if node.Name.Local == xmlTestcase {
-			itemType = testItemTypeCase
-		} else {
-			childParentName = name
-		}
-
-		uniqueName := name
-		if parentName != "" {
-			uniqueName = parentName + name
-		}
-
-		index := indexes[uniqueName]
-		indexes[uniqueName] = index + 1
-
-		item := &TestItem{
-			XMLName:     xmlBasename,
-			Name:        name,
-			ClassName:   className,
-			ID:          testCaseID,
-			Type:        itemType,
-			Index:       index,
-			Attachments: resolveAttachmentPaths(name, className, testCaseID, xmlBasename, attachmentsDir),
-		}
-
-		for _, child := range node.Children {
-			switch child.Name.Local {
-			case xmlTestsuite, xmlTestcase:
-				if built := buildItem(child, childParentName); built != nil {
-					item.Children = append(item.Children, built)
-				}
-			}
-		}
-
-		collectItemProperties(node, item, xmlBasename, attachmentsDir, meta)
-
-		if node.Name.Local == xmlTestcase {
-			dirAttachments := resolveAttachmentPaths(name, className, testCaseID, xmlBasename, attachmentsDir)
-			item.Attachments = uniqueStrings(append(item.Attachments, dirAttachments...))
-		}
-
-		return item
-	}
-
 	var roots []*TestItem
+
 	for _, child := range doc.Children {
-		if built := buildItem(child, ""); built != nil {
+		if built := buildTestItem(
+			child,
+			"",
+			xmlBasename,
+			attachmentsDir,
+			meta,
+			indexes,
+		); built != nil {
 			roots = append(roots, built)
 		}
 	}
@@ -284,7 +235,118 @@ func collectTestItemTree(
 	return roots, nil
 }
 
-func resolveAttachmentPaths(name, className, testCaseID, xmlBasename, attachmentsDir string) []string {
+func buildTestItem(
+	node *xUnitNode,
+	parentName, xmlBasename, attachmentsDir string,
+	meta *Metadata,
+	indexes map[string]int,
+) *TestItem {
+	if node == nil || node.Skip || !isTestItemNode(node) {
+		return nil
+	}
+
+	name := attrValue(node.Attrs, "name")
+	className := attrValue(node.Attrs, "classname")
+	testCaseID := attrValue(node.Attrs, "id")
+	itemType, childParentName := testItemTypeAndChildParent(node, parentName, name)
+
+	item := newTestItem(
+		xmlBasename,
+		name,
+		className,
+		testCaseID,
+		itemType,
+		uniqueTestItemIndex(indexes, parentName, name),
+		attachmentsDir,
+	)
+
+	for _, child := range node.Children {
+		if built := buildTestItem(
+			child,
+			childParentName,
+			xmlBasename,
+			attachmentsDir,
+			meta,
+			indexes,
+		); built != nil {
+			item.Children = append(item.Children, built)
+		}
+	}
+
+	collectItemProperties(node, item, xmlBasename, attachmentsDir, meta)
+	appendTestCaseAttachments(item, node, name, className, testCaseID, xmlBasename, attachmentsDir)
+
+	return item
+}
+
+func isTestItemNode(node *xUnitNode) bool {
+	return node.Name.Local == xmlTestsuite || node.Name.Local == xmlTestcase
+}
+
+func testItemTypeAndChildParent(node *xUnitNode, parentName, name string) (string, string) {
+	if node.Name.Local == xmlTestcase {
+		return testItemTypeCase, parentName
+	}
+
+	return testItemTypeSuite, name
+}
+
+func uniqueTestItemIndex(indexes map[string]int, parentName, name string) int {
+	uniqueName := name
+	if parentName != "" {
+		uniqueName = parentName + name
+	}
+
+	index := indexes[uniqueName]
+	indexes[uniqueName] = index + 1
+
+	return index
+}
+
+func newTestItem(
+	xmlBasename, name, className, testCaseID, itemType string,
+	index int,
+	attachmentsDir string,
+) *TestItem {
+	return &TestItem{
+		XMLName:   xmlBasename,
+		Name:      name,
+		ClassName: className,
+		ID:        testCaseID,
+		Type:      itemType,
+		Index:     index,
+		Attachments: resolveAttachmentPaths(
+			name,
+			className,
+			testCaseID,
+			xmlBasename,
+			attachmentsDir,
+		),
+	}
+}
+
+func appendTestCaseAttachments(
+	item *TestItem,
+	node *xUnitNode,
+	name, className, testCaseID, xmlBasename, attachmentsDir string,
+) {
+	if node.Name.Local != xmlTestcase {
+		return
+	}
+
+	dirAttachments := resolveAttachmentPaths(
+		name,
+		className,
+		testCaseID,
+		xmlBasename,
+		attachmentsDir,
+	)
+	item.Attachments = uniqueStrings(append(item.Attachments, dirAttachments...))
+}
+
+func resolveAttachmentPaths(
+	name, className, testCaseID, xmlBasename, attachmentsDir string,
+) []string {
 	if attachmentsDir == "" {
 		return nil
 	}
@@ -323,6 +385,7 @@ func findAttachmentFiles(dirNames []string, attachmentsDir string) []string {
 
 	for _, dirName := range dirNames {
 		basePath := filepath.Join(attachmentsDir, dirName)
+
 		info, err := os.Stat(basePath)
 		if err != nil {
 			continue
@@ -349,15 +412,17 @@ func findAttachmentFiles(dirNames []string, attachmentsDir string) []string {
 	return uniqueStrings(files)
 }
 
-func parseXUnitDocument(input []byte) (*xunitNode, error) {
+func parseXUnitDocument(input []byte) (*xUnitNode, error) {
 	decoder := xml.NewDecoder(bytes.NewReader(input))
 
-	var root *xunitNode
-	var stack []*xunitNode
+	var (
+		root  *xUnitNode
+		stack []*xUnitNode
+	)
 
 	for {
 		token, err := decoder.Token()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 
@@ -365,36 +430,46 @@ func parseXUnitDocument(input []byte) (*xunitNode, error) {
 			return nil, fmt.Errorf("parsing XML: %w", err)
 		}
 
-		switch element := token.(type) {
-		case xml.StartElement:
-			node := &xunitNode{Name: element.Name, Attrs: append([]xml.Attr{}, element.Attr...)}
-			if len(stack) == 0 {
-				root = node
-			} else {
-				parent := stack[len(stack)-1]
-				parent.Children = append(parent.Children, node)
-			}
-
-			stack = append(stack, node)
-		case xml.EndElement:
-			if len(stack) > 0 {
-				stack = stack[:len(stack)-1]
-			}
-		case xml.CharData:
-			if len(stack) > 0 {
-				stack[len(stack)-1].Chars += string(element)
-			}
-		}
+		root, stack = appendXUnitToken(root, stack, token)
 	}
 
 	if root == nil {
-		return nil, fmt.Errorf("empty XML document")
+		return nil, errors.New("empty XML document")
 	}
 
 	return root, nil
 }
 
-func encodeXUnitDocument(root *xunitNode) ([]byte, error) {
+func appendXUnitToken(
+	root *xUnitNode,
+	stack []*xUnitNode,
+	token xml.Token,
+) (*xUnitNode, []*xUnitNode) {
+	switch element := token.(type) {
+	case xml.StartElement:
+		node := &xUnitNode{Name: element.Name, Attrs: append([]xml.Attr{}, element.Attr...)}
+		if len(stack) == 0 {
+			root = node
+		} else {
+			parent := stack[len(stack)-1]
+			parent.Children = append(parent.Children, node)
+		}
+
+		return root, append(stack, node)
+	case xml.EndElement:
+		if len(stack) > 0 {
+			stack = stack[:len(stack)-1]
+		}
+	case xml.CharData:
+		if len(stack) > 0 {
+			stack[len(stack)-1].Chars += string(element)
+		}
+	}
+
+	return root, stack
+}
+
+func encodeXUnitDocument(root *xUnitNode) ([]byte, error) {
 	var buf bytes.Buffer
 	buf.WriteString(xml.Header)
 
@@ -414,22 +489,23 @@ func encodeXUnitDocument(root *xunitNode) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func writeNode(encoder *xml.Encoder, node *xunitNode) error {
+func writeNode(encoder *xml.Encoder, node *xUnitNode) error {
 	if node.Skip {
 		return nil
 	}
 
 	start := xml.StartElement{Name: node.Name, Attr: node.Attrs}
+
 	err := encoder.EncodeToken(start)
 	if err != nil {
-		return err
+		return fmt.Errorf("encoding XML start element: %w", err)
 	}
 
 	chars := strings.TrimSpace(node.Chars)
 	if chars != "" {
 		err = encoder.EncodeToken(xml.CharData(chars))
 		if err != nil {
-			return err
+			return fmt.Errorf("encoding XML character data: %w", err)
 		}
 	}
 
@@ -440,19 +516,26 @@ func writeNode(encoder *xml.Encoder, node *xunitNode) error {
 		}
 	}
 
-	return encoder.EncodeToken(start.End())
+	err = encoder.EncodeToken(start.End())
+	if err != nil {
+		return fmt.Errorf("encoding XML end element: %w", err)
+	}
+
+	return nil
 }
 
-func removeInvalidTestcases(node *xunitNode, warnings *WarningList, isDocumentRoot bool) error {
+func removeInvalidTestcases(node *xUnitNode, warnings *WarningList, isDocumentRoot bool) error {
 	if node == nil || node.Skip {
 		return nil
 	}
 
 	if node.Name.Local == xmlTestcase {
 		id := attrValue(node.Attrs, "id")
+
 		name := attrValue(node.Attrs, "name")
 		if id == "" && name == "" {
 			node.Skip = true
+
 			warnings.Add("prepare", "Removing testcase because it has no id and name attribute")
 
 			return nil
@@ -469,13 +552,13 @@ func removeInvalidTestcases(node *xunitNode, warnings *WarningList, isDocumentRo
 	}
 
 	if isDocumentRoot && !containsValidTestcase(node) {
-		return fmt.Errorf("no valid testcases found in file")
+		return errors.New("no valid testcases found in file")
 	}
 
 	return nil
 }
 
-func containsValidTestcase(node *xunitNode) bool {
+func containsValidTestcase(node *xUnitNode) bool {
 	if node == nil || node.Skip {
 		return false
 	}
@@ -484,29 +567,14 @@ func containsValidTestcase(node *xunitNode) bool {
 		return true
 	}
 
-	for _, child := range node.Children {
-		if containsValidTestcase(child) {
-			return true
-		}
-	}
-
-	return false
+	return slices.ContainsFunc(node.Children, containsValidTestcase)
 }
 
-func hasAnyTestcase(node *xunitNode) bool {
+func hasAnyTestcase(node *xUnitNode) bool {
 	return containsValidTestcase(node)
 }
 
-func isContainerRoot(node *xunitNode) bool {
-	switch node.Name.Local {
-	case "testsuites", xmlTestsuite:
-		return true
-	default:
-		return false
-	}
-}
-
-func normalizeTimestamps(node *xunitNode) {
+func normalizeTimestamps(node *xUnitNode) {
 	if node == nil || node.Skip {
 		return
 	}
@@ -534,7 +602,7 @@ func normalizeTimestamps(node *xunitNode) {
 	}
 }
 
-func populateFailureBodies(node *xunitNode) {
+func populateFailureBodies(node *xUnitNode) {
 	if node == nil || node.Skip {
 		return
 	}
@@ -550,7 +618,7 @@ func populateFailureBodies(node *xunitNode) {
 	}
 }
 
-func truncateProperties(node *xunitNode, warnings *WarningList) {
+func truncateProperties(node *xUnitNode, warnings *WarningList) {
 	truncatePropertyNode(node, warnings)
 
 	for _, child := range node.Children {
@@ -558,56 +626,104 @@ func truncateProperties(node *xunitNode, warnings *WarningList) {
 	}
 }
 
-func truncatePropertyNode(node *xunitNode, warnings *WarningList) {
-	if node == nil || node.Skip {
+func truncatePropertyNode(node *xUnitNode, warnings *WarningList) {
+	if node == nil || node.Skip || node.Name.Local != xmlProperty {
 		return
 	}
 
-	if node.Name.Local == xmlProperty {
-		name := strings.TrimSpace(attrValue(node.Attrs, "name"))
-		value := strings.TrimSpace(attrValue(node.Attrs, "value"))
+	name := strings.TrimSpace(attrValue(node.Attrs, "name"))
+	value := strings.TrimSpace(attrValue(node.Attrs, "value"))
 
-		if name == "" {
-			node.Skip = true
-			warnings.Add("prepare", "Ignoring <property> with no/empty name attribute")
+	if skipPropertyWithoutName(node, warnings, name) {
+		return
+	}
 
-			return
-		}
+	if skipPropertyWithoutValue(node, warnings, name, value) {
+		return
+	}
 
-		if value == "" {
-			node.Skip = true
-			if _, ok := doNotWarnEmptyValue[name]; !ok {
-				warnings.Add("prepare", fmt.Sprintf("Ignoring <property> (%s) with no/empty value attribute", name))
-			}
+	if skipPropertyWithLongName(node, warnings, name) {
+		return
+	}
 
-			return
-		}
+	skipPropertyWithLongValue(node, warnings, name, value)
+}
 
-		if len(name) > 128 {
-			node.Skip = true
-			warnings.Add("prepare", fmt.Sprintf("Ignoring <property> (%s) with name too long (%d)", abbreviate(name, 50), len(name)))
+func skipPropertyWithoutName(node *xUnitNode, warnings *WarningList, name string) bool {
+	if name != "" {
+		return false
+	}
 
-			return
-		}
+	node.Skip = true
 
-		if len(value) > 128 {
-			node.Skip = true
-			if _, ok := doNotWarnLongValue[name]; !ok {
-				warnings.Add("prepare", fmt.Sprintf("Ignoring <property> (%s) with value too long (%d)", name, len(value)))
-			}
+	warnings.Add("prepare", "Ignoring <property> with no/empty name attribute")
 
-			return
-		}
+	return true
+}
+
+func skipPropertyWithoutValue(node *xUnitNode, warnings *WarningList, name, value string) bool {
+	if value != "" {
+		return false
+	}
+
+	node.Skip = true
+
+	if _, ok := doNotWarnEmptyValue[name]; !ok {
+		warnings.Add(
+			"prepare",
+			fmt.Sprintf("Ignoring <property> (%s) with no/empty value attribute", name),
+		)
+	}
+
+	return true
+}
+
+func skipPropertyWithLongName(node *xUnitNode, warnings *WarningList, name string) bool {
+	if len(name) <= 128 {
+		return false
+	}
+
+	node.Skip = true
+
+	warnings.Add(
+		"prepare",
+		fmt.Sprintf(
+			"Ignoring <property> (%s) with name too long (%d)",
+			abbreviate(name, 50),
+			len(name),
+		),
+	)
+
+	return true
+}
+
+func skipPropertyWithLongValue(node *xUnitNode, warnings *WarningList, name, value string) {
+	if len(value) <= 128 {
+		return
+	}
+
+	node.Skip = true
+
+	if _, ok := doNotWarnLongValue[name]; !ok {
+		warnings.Add(
+			"prepare",
+			fmt.Sprintf(
+				"Ignoring <property> (%s) with value too long (%d)",
+				name,
+				len(value),
+			),
+		)
 	}
 }
 
-func applyConcatChar(node *xunitNode, concatChar string) {
+func applyConcatChar(node *xUnitNode, concatChar string) {
 	if node == nil || node.Skip {
 		return
 	}
 
 	if node.Name.Local == xmlTestcase {
 		className := attrValue(node.Attrs, "classname")
+
 		name := attrValue(node.Attrs, "name")
 		if className != "" {
 			setAttr(node, "name", className+concatChar+name)
@@ -619,12 +735,13 @@ func applyConcatChar(node *xunitNode, concatChar string) {
 	}
 }
 
-func removeEmptySuites(node *xunitNode) bool {
+func removeEmptySuites(node *xUnitNode) bool {
 	if node == nil || node.Skip {
 		return false
 	}
 
 	changed := false
+
 	for _, child := range node.Children {
 		if removeEmptySuites(child) {
 			changed = true
@@ -640,7 +757,7 @@ func removeEmptySuites(node *xunitNode) bool {
 	return changed
 }
 
-func suiteHasTestcase(node *xunitNode) bool {
+func suiteHasTestcase(node *xUnitNode) bool {
 	for _, child := range node.Children {
 		if child.Skip {
 			continue
@@ -668,7 +785,7 @@ func attrValue(attrs []xml.Attr, name string) string {
 	return ""
 }
 
-func setAttr(node *xunitNode, name, value string) {
+func setAttr(node *xUnitNode, name, value string) {
 	for i, attr := range node.Attrs {
 		if attr.Name.Local == name {
 			node.Attrs[i].Value = value
@@ -691,12 +808,12 @@ func removeAttr(attrs []xml.Attr, name string) []xml.Attr {
 	return out
 }
 
-func abbreviate(value string, max int) string {
-	if len(value) <= max {
+func abbreviate(value string, maxLen int) string {
+	if len(value) <= maxLen {
 		return value
 	}
 
-	return value[:max] + "..."
+	return value[:maxLen] + "..."
 }
 
 func uniqueStrings(values []string) []string {
@@ -728,6 +845,7 @@ func CopyAndPrepareResults(
 ) ([]string, TestCaseIndex, WarningList, error) {
 	sources := make([]SourceInput, 0, len(sourcePaths))
 	for _, sourcePath := range sourcePaths {
+		// #nosec G304 -- sourcePath is a CLI-supplied results file
 		content, err := os.ReadFile(sourcePath)
 		if err != nil {
 			return nil, TestCaseIndex{}, nil, fmt.Errorf("reading %q: %w", sourcePath, err)
@@ -743,7 +861,8 @@ func CopyAndPrepareResults(
 	return CopyAndPrepareSourceInputs(workDir, sources, attachmentsDir, meta)
 }
 
-// CopyAndPrepareSourceInputs copies prepared source inputs into workDir/results, applies Layer 1 transforms, and builds the index.
+// CopyAndPrepareSourceInputs copies prepared source inputs into workDir/results,
+// applies Layer 1 transforms, and builds the index.
 func CopyAndPrepareSourceInputs(
 	workDir string,
 	sources []SourceInput,
@@ -751,25 +870,36 @@ func CopyAndPrepareSourceInputs(
 	meta *Metadata,
 ) ([]string, TestCaseIndex, WarningList, error) {
 	resultsDir := filepath.Join(workDir, "results")
-	err := os.MkdirAll(resultsDir, 0o755)
+
+	err := os.MkdirAll(resultsDir, 0o750)
 	if err != nil {
 		return nil, TestCaseIndex{}, nil, fmt.Errorf("creating results dir: %w", err)
 	}
 
 	var warnings WarningList
+
 	processedPaths := make([]string, 0, len(sources))
 
 	for _, source := range sources {
 		output, fileWarnings, err := PrepareXML(source.Content, meta.TestCaseConcatChar)
+
 		warnings = append(warnings, fileWarnings...)
 		if err != nil {
-			warnings.Add("prepare", fmt.Sprintf("Ignoring file %s: %s", filepath.Base(source.OriginalPath), err.Error()))
+			warnings.Add(
+				"prepare",
+				fmt.Sprintf(
+					"Ignoring file %s: %s",
+					filepath.Base(source.OriginalPath),
+					err.Error(),
+				),
+			)
 
 			continue
 		}
 
 		destPath := filepath.Join(resultsDir, source.WorkdirName)
-		err = os.WriteFile(destPath, output, 0o644)
+
+		err = os.WriteFile(destPath, output, 0o600)
 		if err != nil {
 			return nil, TestCaseIndex{}, warnings, fmt.Errorf("writing prepared XML: %w", err)
 		}
@@ -778,7 +908,7 @@ func CopyAndPrepareSourceInputs(
 	}
 
 	if len(processedPaths) == 0 {
-		return nil, TestCaseIndex{}, warnings, fmt.Errorf("no valid XML files after preparation")
+		return nil, TestCaseIndex{}, warnings, errors.New("no valid XML files after preparation")
 	}
 
 	index, indexWarnings, err := BuildTestCaseIndex(processedPaths, attachmentsDir, meta)

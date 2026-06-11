@@ -23,7 +23,7 @@ type loggerKey struct{}
 
 // NewLogger creates a *slog.Logger that writes to stderr at the level implied by verbosity.
 func NewLogger(verbosity int) *slog.Logger {
-	level := verbosityToLevel(verbosity)
+	level := VerbosityToLevel(verbosity)
 
 	handler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: level,
@@ -50,7 +50,8 @@ func ResolveVerbosity(cmd *cobra.Command) int {
 	return VerbositySilent
 }
 
-func verbosityToLevel(verbosity int) slog.Level {
+// VerbosityToLevel maps CLI verbosity integers to slog levels.
+func VerbosityToLevel(verbosity int) slog.Level {
 	switch {
 	case verbosity <= VerbositySilent:
 		return slog.Level(math.MaxInt)

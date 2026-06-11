@@ -1,4 +1,4 @@
-package send
+package send_test
 
 import (
 	"os"
@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/klaskosk/report-portal-uploader/internal/send"
 	"github.com/stretchr/testify/require"
 )
 
@@ -23,7 +24,7 @@ func TestPrepareXML_goldenTransforms(t *testing.T) {
   </testsuite>
 </testsuites>`)
 
-	output, warnings, err := PrepareXML(input, ".")
+	output, warnings, err := send.PrepareXML(input, ".")
 	require.NoError(t, err, "expected XML preparation to succeed")
 
 	text := string(output)
@@ -40,16 +41,22 @@ func TestBuildTestCaseIndex_attachmentPaths(t *testing.T) {
 
 	dir := t.TempDir()
 	attachments := filepath.Join(dir, "attachments")
-	err := os.MkdirAll(filepath.Join(attachments, "C.N"), 0o755)
+	err := os.MkdirAll(filepath.Join(attachments, "C.N"), 0o750)
 	require.NoError(t, err, "expected attachment dir")
-	err = os.WriteFile(filepath.Join(attachments, "C.N", "log.txt"), []byte("x"), 0o644)
+	err = os.WriteFile(filepath.Join(attachments, "C.N", "log.txt"), []byte("x"), 0o600)
 	require.NoError(t, err, "expected attachment file")
 
 	xmlPath := filepath.Join(dir, "Sample.xml")
-	err = os.WriteFile(xmlPath, []byte(`<testsuites><testsuite name="S"><testcase classname="C" name="N"/></testsuite></testsuites>`), 0o644)
+	err = os.WriteFile(
+		xmlPath,
+		[]byte(
+			`<testsuites><testsuite name="S"><testcase classname="C" name="N"/></testsuite></testsuites>`,
+		),
+		0o600,
+	)
 	require.NoError(t, err, "expected xml fixture")
 
-	meta, err := ParseMetadataJSON([]byte(`{
+	meta, err := send.ParseMetadataJSON([]byte(`{
 		"targets": {"reportportal": {
 			"config": {"hostname": "rp.example.com", "project": "demo"},
 			"processing": {"property_filter": ["attachment"], "testcase_concat_char": "."}
@@ -57,16 +64,22 @@ func TestBuildTestCaseIndex_attachmentPaths(t *testing.T) {
 	}`))
 	require.NoError(t, err, "expected metadata parse")
 
-	prepared, _, err := PrepareXML(mustRead(t, xmlPath), ".")
+	prepared, _, err := send.PrepareXML(mustRead(t, xmlPath), ".")
 	require.NoError(t, err, "expected prepare")
-	err = os.WriteFile(xmlPath, prepared, 0o644)
+	err = os.WriteFile(xmlPath, prepared, 0o600)
 	require.NoError(t, err, "expected prepared xml write")
 
-	index, _, err := BuildTestCaseIndex([]string{xmlPath}, attachments, meta)
+	index, _, err := send.BuildTestCaseIndex([]string{xmlPath}, attachments, meta)
 	require.NoError(t, err, "expected index build")
+
 	steps := index.Steps()
 	require.Len(t, steps, 1, "expected one testcase")
-	require.Contains(t, steps[0].Attachments, filepath.Join("C.N", "log.txt"), "expected attachment path")
+	require.Contains(
+		t,
+		steps[0].Attachments,
+		filepath.Join("C.N", "log.txt"),
+		"expected attachment path",
+	)
 	require.Equal(t, "C.N", steps[0].Name, "expected concat name in index")
 }
 
@@ -74,7 +87,7 @@ func TestBuildTestCaseIndex_multiXML(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	meta, err := ParseMetadataJSON([]byte(`{
+	meta, err := send.ParseMetadataJSON([]byte(`{
 		"targets": {"reportportal": {
 			"config": {"hostname": "rp.example.com", "project": "demo"},
 			"processing": {}
@@ -83,14 +96,22 @@ func TestBuildTestCaseIndex_multiXML(t *testing.T) {
 	require.NoError(t, err, "expected metadata parse")
 
 	paths := make([]string, 2)
+
 	for i, name := range []string{"a.xml", "b.xml"} {
 		path := filepath.Join(dir, name)
-		err = os.WriteFile(path, []byte(`<testsuites><testsuite name="S"><testcase name="same"/></testsuite></testsuites>`), 0o644)
+		err = os.WriteFile(
+			path,
+			[]byte(
+				`<testsuites><testsuite name="S"><testcase name="same"/></testsuite></testsuites>`,
+			),
+			0o600,
+		)
 		require.NoError(t, err, "expected xml write")
+
 		paths[i] = path
 	}
 
-	index, _, err := BuildTestCaseIndex(paths, "", meta)
+	index, _, err := send.BuildTestCaseIndex(paths, "", meta)
 	require.NoError(t, err, "expected index build")
 	require.Len(t, index.Roots, 2, "expected two root suites")
 	require.Equal(t, "S", index.Roots[0].Name, "expected first root suite name")
@@ -109,10 +130,10 @@ func TestBuildTestCaseIndex_suiteDoesNotInheritTestcaseProperties(t *testing.T) 
 	err := os.WriteFile(xmlPath, []byte(`<testsuites><testsuite name="Example Ginkgo Suite">
 		<testcase name="[It] first test"><property name="inventory-testcase-id" value="INV-1"/></testcase>
 		<testcase name="[It] second test"><property name="inventory-testcase-id" value="INV-2"/></testcase>
-	</testsuite></testsuites>`), 0o644)
+	</testsuite></testsuites>`), 0o600)
 	require.NoError(t, err, "expected xml fixture")
 
-	meta, err := ParseMetadataJSON([]byte(`{
+	meta, err := send.ParseMetadataJSON([]byte(`{
 		"targets": {"reportportal": {
 			"config": {"hostname": "rp.example.com", "project": "demo"},
 			"processing": {"property_filter": ["inventory-testcase-id"]}
@@ -120,7 +141,7 @@ func TestBuildTestCaseIndex_suiteDoesNotInheritTestcaseProperties(t *testing.T) 
 	}`))
 	require.NoError(t, err, "expected metadata parse")
 
-	index, _, err := BuildTestCaseIndex([]string{xmlPath}, "", meta)
+	index, _, err := send.BuildTestCaseIndex([]string{xmlPath}, "", meta)
 	require.NoError(t, err, "expected index build")
 	require.Len(t, index.Roots, 1, "expected one root suite")
 	require.Empty(t, index.Roots[0].Properties, "expected suite to have no testcase properties")
@@ -134,9 +155,10 @@ func TestBuildTestCaseIndex_suiteDoesNotInheritTestcaseProperties(t *testing.T) 
 func TestPrepareXML_preservesSystemErr(t *testing.T) {
 	t.Parallel()
 
-	input := []byte(`<testsuites><testsuite name="S"><testcase name="T"><system-err>STEP: hello</system-err></testcase></testsuite></testsuites>`)
+	input := []byte(`<testsuites><testsuite name="S"><testcase name="T">` +
+		`<system-err>STEP: hello</system-err></testcase></testsuite></testsuites>`)
 
-	output, _, err := PrepareXML(input, "")
+	output, _, err := send.PrepareXML(input, "")
 	require.NoError(t, err, "expected XML preparation to succeed")
 	require.Contains(t, string(output), "<system-err>", "expected system-err element preserved")
 	require.Contains(t, string(output), "STEP: hello", "expected system-err body preserved")
@@ -147,10 +169,16 @@ func TestBuildTestCaseIndex_nestedProperties(t *testing.T) {
 
 	dir := t.TempDir()
 	xmlPath := filepath.Join(dir, "props.xml")
-	err := os.WriteFile(xmlPath, []byte(`<testsuites><testsuite name="S"><testcase classname="C" name="N"><properties><property name="ci-lane" value="main"/></properties></testcase></testsuite></testsuites>`), 0o644)
+	err := os.WriteFile(
+		xmlPath,
+		[]byte(`<testsuites><testsuite name="S"><testcase classname="C" name="N">`+
+			`<properties><property name="ci-lane" value="main"/></properties>`+
+			`</testcase></testsuite></testsuites>`),
+		0o600,
+	)
 	require.NoError(t, err, "expected xml fixture")
 
-	meta, err := ParseMetadataJSON([]byte(`{
+	meta, err := send.ParseMetadataJSON([]byte(`{
 		"targets": {"reportportal": {
 			"config": {"hostname": "rp.example.com", "project": "demo"},
 			"processing": {"property_filter": ["ci-lane"]}
@@ -158,8 +186,9 @@ func TestBuildTestCaseIndex_nestedProperties(t *testing.T) {
 	}`))
 	require.NoError(t, err, "expected metadata parse")
 
-	index, _, err := BuildTestCaseIndex([]string{xmlPath}, "", meta)
+	index, _, err := send.BuildTestCaseIndex([]string{xmlPath}, "", meta)
 	require.NoError(t, err, "expected index build")
+
 	steps := index.Steps()
 	require.Len(t, steps, 1, "expected one testcase")
 	require.Len(t, steps[0].Properties, 1, "expected property from nested properties element")
@@ -169,6 +198,7 @@ func TestBuildTestCaseIndex_nestedProperties(t *testing.T) {
 func mustRead(t *testing.T, path string) []byte {
 	t.Helper()
 
+	// #nosec G304 -- test fixture path from t.TempDir or testdata
 	data, err := os.ReadFile(path)
 	require.NoError(t, err, "expected file read")
 

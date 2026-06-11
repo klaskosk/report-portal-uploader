@@ -10,14 +10,14 @@ import (
 
 // BuildResultsZip creates a zip archive containing the given XML files using basenames as entry names.
 func BuildResultsZip(xmlPaths []string, destPath string) error {
-	zipFile, err := os.Create(destPath)
+	zipFile, err := os.Create(destPath) //nolint:gosec // destPath is a workdir artifact path
 	if err != nil {
 		return fmt.Errorf("creating zip file: %w", err)
 	}
-	defer zipFile.Close()
+	defer func() { _ = zipFile.Close() }()
 
 	writer := zip.NewWriter(zipFile)
-	defer writer.Close()
+	defer func() { _ = writer.Close() }()
 
 	for _, xmlPath := range xmlPaths {
 		err = addFileToZip(writer, xmlPath)
@@ -35,11 +35,11 @@ func BuildResultsZip(xmlPaths []string, destPath string) error {
 }
 
 func addFileToZip(writer *zip.Writer, path string) error {
-	source, err := os.Open(path)
+	source, err := os.Open(path) //nolint:gosec // path is a prepared XML under workDir
 	if err != nil {
 		return fmt.Errorf("opening %q for zip: %w", path, err)
 	}
-	defer source.Close()
+	defer func() { _ = source.Close() }()
 
 	info, err := source.Stat()
 	if err != nil {

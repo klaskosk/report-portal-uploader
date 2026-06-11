@@ -16,117 +16,105 @@ func AddCommands(root *cobra.Command) {
 	root.AddCommand(newSendCommand())
 }
 
+type sendOptions struct {
+	metadataPath   string
+	resultsGlob    string
+	attachmentsDir string
+	templateVars   []string
+	launchURLFile  string
+}
+
 func newSendCommand() *cobra.Command {
-	var (
-		metadataPath   string
-		resultsGlob    string
-		attachmentsDir string
-		templateVars   []string
-		launchURLFile  string
-	)
+	opts := &sendOptions{}
 
 	cmd := &cobra.Command{
 		Use:   "send",
 		Short: "Upload xUnit results to Report Portal using a metadata JSON file",
-		RunE: core.WithPrintedErrors(func(cmd *cobra.Command, _ []string) error {
-			printer := core.NewTestPrinter(
-				core.EffectiveOutputFormat(cmd.Root()),
-				cmd.OutOrStdout(),
-				cmd.ErrOrStderr(),
-			)
-
-			vars, err := parseTemplateVars(templateVars)
-			if err != nil {
-				return core.PrintAndReturnError(printer, err)
-			}
-
-			token, _ := cmd.Root().Flags().GetString("token")
-			if token == "" {
-				token = os.Getenv("REPORTPORTAL_TOKEN")
-			}
-
-			httpTimeout, _ := cmd.Root().Flags().GetDuration("http-timeout")
-			keepWorkdir, _ := cmd.Root().Flags().GetBool("keep-workdir")
-
-			cfg := rpusend.Config{
-				MetadataPath:   metadataPath,
-				ResultsGlob:    resultsGlob,
-				AttachmentsDir: attachmentsDir,
-				TemplateVars:   vars,
-				Token:          token,
-				HTTPTimeout:    httpTimeout,
-				KeepWorkDir:    keepWorkdir,
-				LaunchURLFile:  launchURLFile,
-			}
-
-			logger := core.LoggerFromCmd(cmd)
-			result, err := rpusend.Run(context.Background(), cfg, logger)
-			if err != nil {
-				return core.PrintAndReturnError(printer, err)
-			}
-
-			if result.Disabled {
-				return printer.PrintMessage(result.Message)
-			}
-
-			for _, warning := range result.Warnings {
-				printer.PrintWarning(warning)
-			}
-
-			if printerErr := printer.Print(result, nil, nil); printerErr != nil {
-				return core.PrintAndReturnError(printer, printerErr)
-			}
-
-			if core.EffectiveOutputFormat(cmd.Root()) != "json" && result.LaunchURL != "" {
-				_, _ = fmt.Fprintln(cmd.OutOrStdout(), result.LaunchURL)
-			}
-
-			return nil
-		}),
+		RunE:  core.WithPrintedErrors(runSendCommand(opts)),
 	}
 
-	cmd.Flags().StringVar(&metadataPath, "metadata", "", "Path to metadata JSON file")
-	cmd.Flags().StringVar(&resultsGlob, "results", "", "xUnit results glob (e.g. results/*.xml)")
-	cmd.Flags().StringVar(&attachmentsDir, "attachments", "", "Attachments directory")
-	cmd.Flags().StringArrayVar(&templateVars, "var", nil, "Metadata template variable (key=value)")
-	cmd.Flags().StringVar(&launchURLFile, "launch-url-file", "", "Write launch URL to this file")
-
-	_ = cmd.MarkFlagRequired("metadata")
-	_ = cmd.MarkFlagRequired("results")
-
-	cmd.SetFlagErrorFunc(migrationFlagErrorFunc)
+	configureSendFlags(cmd, opts)
 
 	return cmd
 }
 
-func migrationFlagErrorFunc(_ *cobra.Command, err error) error {
-	if hint := migrationFlagHint(err.Error()); hint != "" {
-		return fmt.Errorf("%s; %s", err.Error(), hint)
-	}
+func configureSendFlags(cmd *cobra.Command, opts *sendOptions) {
+	cmd.Flags().StringVar(&opts.metadataPath, "metadata", "", "Path to metadata JSON file")
+	cmd.Flags().
+		StringVar(&opts.resultsGlob, "results", "", "xUnit results glob (e.g. results/*.xml)")
+	cmd.Flags().StringVar(&opts.attachmentsDir, "attachments", "", "Attachments directory")
+	cmd.Flags().
+		StringArrayVar(&opts.templateVars, "var", nil, "Metadata template variable (key=value)")
+	cmd.Flags().
+		StringVar(&opts.launchURLFile, "launch-url-file", "", "Write launch URL to this file")
 
-	return err
+	_ = cmd.MarkFlagRequired("metadata")
+	_ = cmd.MarkFlagRequired("results")
 }
 
-func migrationFlagHint(errMsg string) string {
-	for flag, hint := range removedFlagHints {
-		if strings.Contains(errMsg, flag) {
-			return hint
+func runSendCommand(opts *sendOptions) func(*cobra.Command, []string) error {
+	return func(cmd *cobra.Command, _ []string) error {
+		printer := core.NewTestPrinter(
+			core.EffectiveOutputFormat(cmd.Root()),
+			cmd.OutOrStdout(),
+			cmd.ErrOrStderr(),
+		)
+
+		vars, err := parseTemplateVars(opts.templateVars)
+		if err != nil {
+			return core.PrintAndReturnError(printer, err)
 		}
+
+		token, _ := cmd.Root().Flags().GetString("token")
+		if token == "" {
+			token = os.Getenv("REPORTPORTAL_TOKEN")
+		}
+
+		httpTimeout, _ := cmd.Root().Flags().GetDuration("http-timeout")
+		keepWorkdir, _ := cmd.Root().Flags().GetBool("keep-workdir")
+
+		cfg := rpusend.Config{
+			MetadataPath:   opts.metadataPath,
+			ResultsGlob:    opts.resultsGlob,
+			AttachmentsDir: opts.attachmentsDir,
+			TemplateVars:   vars,
+			Token:          token,
+			HTTPTimeout:    httpTimeout,
+			KeepWorkDir:    keepWorkdir,
+			LaunchURLFile:  opts.launchURLFile,
+		}
+
+		logger := core.LoggerFromCmd(cmd)
+
+		result, err := rpusend.Run(context.Background(), cfg, logger)
+		if err != nil {
+			return core.PrintAndReturnError(printer, err)
+		}
+
+		if result.Disabled {
+			return printer.PrintMessage(result.Message)
+		}
+
+		for _, warning := range result.Warnings {
+			printer.PrintWarning(warning)
+		}
+
+		printerErr := printer.Print(result, nil, nil)
+		if printerErr != nil {
+			return core.PrintAndReturnError(printer, printerErr)
+		}
+
+		if core.EffectiveOutputFormat(cmd.Root()) != "json" && result.LaunchURL != "" {
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), result.LaunchURL)
+		}
+
+		return nil
 	}
-
-	return ""
-}
-
-var removedFlagHints = map[string]string{
-	"--wait":     "remove --wait (rpu send is synchronous and completes before exit)",
-	"--url":      "use metadata hostname and --token or REPORTPORTAL_TOKEN",
-	"--username": "use --token or REPORTPORTAL_TOKEN",
-	"--password": "use --token or REPORTPORTAL_TOKEN",
 }
 
 func parseTemplateVars(values []string) (map[string]string, error) {
 	if len(values) == 0 {
-		return nil, nil
+		return map[string]string{}, nil
 	}
 
 	vars := make(map[string]string, len(values))

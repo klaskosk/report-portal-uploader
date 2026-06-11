@@ -1,0 +1,54 @@
+version: "2"
+linters:
+  default: all
+  enable:
+    - gomodguard_v2
+    - wsl_v5
+  disable:
+    - depguard
+    - err113
+    - exhaustruct
+    - goconst
+    - gochecknoglobals
+    - gomodguard
+    - mnd
+    - tagliatelle
+    - wsl
+  settings:
+    gomoddirectives:
+      replace-local: true
+    revive:
+      rules:
+        - name: var-naming
+          arguments:
+            - []
+            - []
+            - [{skipPackageNameChecks: true}]
+    staticcheck:
+        checks:
+          - all
+          # Incorrect or missing package comment.
+          # https://staticcheck.dev/docs/checks/#ST1000
+          - -ST1000
+    varnamelen:
+      ignore-type-assert-ok: true
+      ignore-map-index-ok: true
+      ignore-chan-recv-ok: true
+      ignore-names:
+        - i
+        - err
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - funlen
+          - dupl
+formatters:
+  enable:
+    - gci
+    - gofmt
+    - gofumpt
+    - goimports
+    - golines
+run:
+  allow-serial-runners: true

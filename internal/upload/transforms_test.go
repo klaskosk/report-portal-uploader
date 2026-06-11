@@ -1,4 +1,4 @@
-package upload
+package upload_test
 
 import (
 	"os"
@@ -6,21 +6,30 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/klaskosk/report-portal-uploader/internal/upload"
 	"github.com/stretchr/testify/require"
 )
 
 func TestShouldExclude_defaultPattern(t *testing.T) {
 	t.Parallel()
 
-	require.True(t, ShouldExclude("foo_report_testrun_bar.xml", []string{defaultExcludePattern}), "expected exclude match")
-	require.False(t, ShouldExclude("suite.xml", []string{defaultExcludePattern}), "expected non-excluded file")
+	require.True(
+		t,
+		upload.ShouldExclude("foo_report_testrun_bar.xml", []string{"*report_testrun*"}),
+		"expected exclude match",
+	)
+	require.False(
+		t,
+		upload.ShouldExclude("suite.xml", []string{"*report_testrun*"}),
+		"expected non-excluded file",
+	)
 }
 
 func TestApplyLayer2Transforms_laneLabeling(t *testing.T) {
 	t.Parallel()
 
 	input := mustReadFixture(t, "lane_input.xml")
-	output, warnings, err := ApplyLayer2Transforms(input, TransformOptions{
+	output, warnings, err := upload.ApplyLayer2Transforms(input, upload.TransformOptions{
 		Lane:         "gm",
 		LaneProperty: "ci-lane",
 		SourcePath:   "lane_input.xml",
@@ -38,7 +47,10 @@ func TestApplyLayer2Transforms_emptyLane(t *testing.T) {
 	t.Parallel()
 
 	input := mustReadFixture(t, "lane_input.xml")
-	output, _, err := ApplyLayer2Transforms(input, TransformOptions{SourcePath: "lane_input.xml"})
+	output, _, err := upload.ApplyLayer2Transforms(
+		input,
+		upload.TransformOptions{SourcePath: "lane_input.xml"},
+	)
 	require.NoError(t, err, "expected empty lane transform")
 
 	text := string(output)
@@ -50,7 +62,7 @@ func TestApplyLayer2Transforms_customLaneProperty(t *testing.T) {
 	t.Parallel()
 
 	input := mustReadFixture(t, "lane_input.xml")
-	output, _, err := ApplyLayer2Transforms(input, TransformOptions{
+	output, _, err := upload.ApplyLayer2Transforms(input, upload.TransformOptions{
 		Lane:         "ntpfailover",
 		LaneProperty: "suite-group",
 		SourcePath:   "lane_input.xml",
@@ -63,7 +75,10 @@ func TestApplyLayer2Transforms_sanitizeSystemOut(t *testing.T) {
 	t.Parallel()
 
 	input := mustReadFixture(t, "sanitize_input.xml")
-	output, _, err := ApplyLayer2Transforms(input, TransformOptions{SourcePath: "sanitize_input.xml"})
+	output, _, err := upload.ApplyLayer2Transforms(
+		input,
+		upload.TransformOptions{SourcePath: "sanitize_input.xml"},
+	)
 	require.NoError(t, err, "expected sanitize transform")
 
 	text := string(output)
@@ -76,7 +91,10 @@ func TestApplyLayer2Transforms_attrToProperty(t *testing.T) {
 	t.Parallel()
 
 	input := mustReadFixture(t, "attr_input.xml")
-	output, _, err := ApplyLayer2Transforms(input, TransformOptions{SourcePath: "attr_input.xml"})
+	output, _, err := upload.ApplyLayer2Transforms(
+		input,
+		upload.TransformOptions{SourcePath: "attr_input.xml"},
+	)
 	require.NoError(t, err, "expected attr to property transform")
 
 	text := string(output)
@@ -92,10 +110,18 @@ func TestApplyLayer2Transforms_invalidTime(t *testing.T) {
 	t.Parallel()
 
 	input := mustReadFixture(t, "simple.xml")
-	_, warnings, err := ApplyLayer2Transforms(input, TransformOptions{SourcePath: "simple.xml"})
+	_, warnings, err := upload.ApplyLayer2Transforms(
+		input,
+		upload.TransformOptions{SourcePath: "simple.xml"},
+	)
 	require.NoError(t, err, "expected time normalization")
 	require.NotEmpty(t, warnings, "expected invalid time warning")
-	require.Contains(t, warnings.Messages()[0], "normalized to 0.0", "expected normalization warning")
+	require.Contains(
+		t,
+		warnings.Messages()[0],
+		"normalized to 0.0",
+		"expected normalization warning",
+	)
 }
 
 func TestApplyLayer2Transforms_combinedChain(t *testing.T) {
@@ -109,7 +135,7 @@ func TestApplyLayer2Transforms_combinedChain(t *testing.T) {
   </testsuite>
 </testsuites>`)
 
-	output, warnings, err := ApplyLayer2Transforms(input, TransformOptions{
+	output, warnings, err := upload.ApplyLayer2Transforms(input, upload.TransformOptions{
 		Lane:         "gm",
 		LaneProperty: "ci-lane",
 		SourcePath:   "combined.xml",
@@ -127,8 +153,8 @@ func TestApplyLayer2Transforms_combinedChain(t *testing.T) {
 func TestWorkdirName_uniquePerRecord(t *testing.T) {
 	t.Parallel()
 
-	nameA := WorkdirName(SourceFile{Index: 0, Path: "/tmp/a.xml"})
-	nameB := WorkdirName(SourceFile{Index: 1, Path: "/tmp/a.xml"})
+	nameA := upload.WorkdirName(upload.SourceFile{Index: 0, Path: "/tmp/a.xml"})
+	nameB := upload.WorkdirName(upload.SourceFile{Index: 1, Path: "/tmp/a.xml"})
 	require.NotEqual(t, nameA, nameB, "expected unique workdir names for duplicate basenames")
 	require.True(t, strings.HasPrefix(nameA, "0_"), "expected source index prefix")
 	require.True(t, strings.HasSuffix(nameA, "_a.xml"), "expected original basename suffix")
@@ -138,6 +164,7 @@ func mustReadFixture(t *testing.T, name string) []byte {
 	t.Helper()
 
 	path := filepath.Join("..", "..", "test", "testdata", "upload", name)
+	// #nosec G304 -- test fixture path under test/testdata
 	data, err := os.ReadFile(path)
 	require.NoError(t, err, "expected fixture %s", name)
 

@@ -2,6 +2,7 @@ package send
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,20 +16,20 @@ import (
 
 // Metadata holds parsed metadata for the Report Portal target.
 type Metadata struct {
-	Disabled                bool
-	Hostname                string
-	HostnameURL             string
-	Project                 string
-	PropertyFilter          []string
-	PropertyFilterCompiled  []*regexp.Regexp
-	ApplyTFA                bool
-	ApplyLLMAnalysis        bool
-	DisableTestItemUpdater  bool
-	TestCaseConcatChar      string
-	LaunchName              string
-	LaunchDescription       string
-	LaunchAttributes        []LaunchAttribute
-	RequestID               string
+	Disabled               bool
+	Hostname               string
+	HostnameURL            string
+	Project                string
+	PropertyFilter         []string
+	PropertyFilterCompiled []*regexp.Regexp
+	ApplyTFA               bool
+	ApplyLLMAnalysis       bool
+	DisableTestItemUpdater bool
+	TestCaseConcatChar     string
+	LaunchName             string
+	LaunchDescription      string
+	LaunchAttributes       []LaunchAttribute
+	RequestID              string
 }
 
 // LaunchAttribute is a launch-level attribute from metadata JSON.
@@ -44,8 +45,9 @@ func ParseMetadataFile(path string, vars map[string]string) (*Metadata, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer os.Remove(processedPath)
+	defer func() { _ = os.Remove(processedPath) }()
 
+	// #nosec G304 -- processedPath is a temp file created by this package
 	content, err := os.ReadFile(processedPath)
 	if err != nil {
 		return nil, fmt.Errorf("reading metadata: %w", err)
@@ -54,31 +56,35 @@ func ParseMetadataFile(path string, vars map[string]string) (*Metadata, error) {
 	return ParseMetadataJSON(content)
 }
 
+type metadataJSONRoot struct {
+	Targets struct {
+		ReportPortal *reportPortalTargetJSON `json:"reportportal"`
+	} `json:"targets"`
+}
+
+type reportPortalTargetJSON struct {
+	Disabled bool `json:"disabled"`
+	Config   struct {
+		Hostname string `json:"hostname"`
+		Project  string `json:"project"`
+	} `json:"config"`
+	Processing struct {
+		PropertyFilter         []string `json:"property_filter"`
+		ApplyTFA               *bool    `json:"apply_tfa"`
+		ApplyLLMAnalysis       *bool    `json:"apply_llm_analysis"`
+		DisableTestItemUpdater bool     `json:"disable_testitem_updater"`
+		TestCaseConcatChar     string   `json:"testcase_concat_char"`
+		Launch                 struct {
+			Name        string           `json:"name"`
+			Description string           `json:"description"`
+			Attributes  []map[string]any `json:"attributes"`
+		} `json:"launch"`
+	} `json:"processing"`
+}
+
 // ParseMetadataJSON parses raw metadata JSON bytes.
 func ParseMetadataJSON(content []byte) (*Metadata, error) {
-	var root struct {
-		Targets struct {
-			ReportPortal *struct {
-				Disabled   bool `json:"disabled"`
-				Config     struct {
-					Hostname string `json:"hostname"`
-					Project  string `json:"project"`
-				} `json:"config"`
-				Processing struct {
-					PropertyFilter         []string `json:"property_filter"`
-					ApplyTFA               *bool    `json:"apply_tfa"`
-					ApplyLLMAnalysis       *bool    `json:"apply_llm_analysis"`
-					DisableTestItemUpdater bool     `json:"disable_testitem_updater"`
-					TestCaseConcatChar     string   `json:"testcase_concat_char"`
-					Launch                 struct {
-						Name        string                   `json:"name"`
-						Description string                   `json:"description"`
-						Attributes  []map[string]any         `json:"attributes"`
-					} `json:"launch"`
-				} `json:"processing"`
-			} `json:"reportportal"`
-		} `json:"targets"`
-	}
+	var root metadataJSONRoot
 
 	err := json.Unmarshal(content, &root)
 	if err != nil {
@@ -86,10 +92,13 @@ func ParseMetadataJSON(content []byte) (*Metadata, error) {
 	}
 
 	if root.Targets.ReportPortal == nil {
-		return nil, fmt.Errorf("metadata missing targets.reportportal")
+		return nil, errors.New("metadata missing targets.reportportal")
 	}
 
-	target := root.Targets.ReportPortal
+	return metadataFromReportPortalTarget(root.Targets.ReportPortal)
+}
+
+func metadataFromReportPortalTarget(target *reportPortalTargetJSON) (*Metadata, error) {
 	meta := &Metadata{
 		Disabled:               target.Disabled,
 		Hostname:               strings.TrimSpace(target.Config.Hostname),
@@ -109,46 +118,69 @@ func ParseMetadataJSON(content []byte) (*Metadata, error) {
 		meta.ApplyLLMAnalysis = *target.Processing.ApplyLLMAnalysis
 	}
 
-	if meta.Hostname == "" {
-		return nil, fmt.Errorf("metadata missing targets.reportportal.config.hostname")
-	}
-
-	if meta.Project == "" {
-		return nil, fmt.Errorf("metadata missing targets.reportportal.config.project")
+	err := validateRequiredMetadataFields(meta)
+	if err != nil {
+		return nil, err
 	}
 
 	meta.HostnameURL = hostnameURL(meta.Hostname)
 
 	if meta.LaunchName == "" {
-		meta.LaunchName = defaultLaunchName
+		meta.LaunchName = DefaultLaunchName
 	}
 
-	if target.Processing.PropertyFilter != nil {
-		meta.PropertyFilter = target.Processing.PropertyFilter
-		compiled, err := compilePropertyFilters(meta.PropertyFilter)
-		if err != nil {
-			return nil, err
-		}
-
-		meta.PropertyFilterCompiled = compiled
-	}
-
-	attrs, warnings := parseLaunchAttributes(target.Processing.Launch.Attributes)
-	meta.LaunchAttributes = attrs
-
-	meta.LaunchAttributes = injectLaunchAttributes(meta.LaunchAttributes, meta.RequestID)
-
-	if err := validateConcatChar(meta.TestCaseConcatChar); err != nil {
+	err = applyPropertyFilters(meta, target.Processing.PropertyFilter)
+	if err != nil {
 		return nil, err
 	}
 
-	_ = warnings
+	attrs, _ := parseLaunchAttributes(target.Processing.Launch.Attributes)
+	meta.LaunchAttributes = injectLaunchAttributes(attrs, meta.RequestID)
+
+	err = validateConcatChar(meta.TestCaseConcatChar)
+	if err != nil {
+		return nil, err
+	}
 
 	return meta, nil
 }
 
+func validateRequiredMetadataFields(meta *Metadata) error {
+	if meta.Hostname == "" {
+		return errors.New("metadata missing targets.reportportal.config.hostname")
+	}
+
+	if meta.Project == "" {
+		return errors.New("metadata missing targets.reportportal.config.project")
+	}
+
+	return nil
+}
+
+func applyPropertyFilters(meta *Metadata, patterns []string) error {
+	if patterns == nil {
+		return nil
+	}
+
+	meta.PropertyFilter = patterns
+
+	compiled, err := compilePropertyFilters(meta.PropertyFilter)
+	if err != nil {
+		return err
+	}
+
+	meta.PropertyFilterCompiled = compiled
+
+	return nil
+}
+
 func substituteMetadataVars(path string, vars map[string]string) (string, error) {
-	content, err := os.ReadFile(path)
+	err := validateCLIPath(path)
+	if err != nil {
+		return "", fmt.Errorf("reading metadata template: %w", err)
+	}
+
+	content, err := os.ReadFile(path) //nolint:gosec // path validated above
 	if err != nil {
 		return "", fmt.Errorf("reading metadata template: %w", err)
 	}
@@ -164,15 +196,16 @@ func substituteMetadataVars(path string, vars map[string]string) (string, error)
 	}
 
 	err = tmpl.Execute(temp, vars)
+
 	closeErr := temp.Close()
 	if err != nil {
-		os.Remove(temp.Name())
+		_ = os.Remove(temp.Name())
 
 		return "", fmt.Errorf("substituting metadata variables: %w", err)
 	}
 
 	if closeErr != nil {
-		os.Remove(temp.Name())
+		_ = os.Remove(temp.Name())
 
 		return "", fmt.Errorf("closing temp metadata file: %w", closeErr)
 	}
@@ -204,8 +237,22 @@ func compilePropertyFilters(patterns []string) ([]*regexp.Regexp, error) {
 }
 
 // compileFullStringPattern wraps pattern for Java String.matches() semantics (RE2 full-string match).
+func validateCLIPath(path string) error {
+	clean := filepath.Clean(path)
+	if strings.Contains(clean, "..") {
+		return fmt.Errorf("invalid path %q", path)
+	}
+
+	return nil
+}
+
 func compileFullStringPattern(pattern string) (*regexp.Regexp, error) {
-	return regexp.Compile("^(?:" + pattern + ")$")
+	re, err := regexp.Compile("^(?:" + pattern + ")$")
+	if err != nil {
+		return nil, fmt.Errorf("compiling property filter pattern: %w", err)
+	}
+
+	return re, nil
 }
 
 // PropertyNameMatches reports whether name matches any compiled filter pattern.
@@ -225,6 +272,7 @@ func PropertyNameMatches(compiled []*regexp.Regexp, name string) bool {
 
 func parseLaunchAttributes(raw []map[string]any) ([]LaunchAttribute, WarningList) {
 	var warnings WarningList
+
 	attrs := make([]LaunchAttribute, 0, len(raw))
 
 	for _, item := range raw {
@@ -233,7 +281,10 @@ func parseLaunchAttributes(raw []map[string]any) ([]LaunchAttribute, WarningList
 		system, _ := item["system"].(bool)
 
 		if strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
-			warnings.Add("metadata", fmt.Sprintf("Skipping launch attribute with empty key or value: %v", item))
+			warnings.Add(
+				"metadata",
+				fmt.Sprintf("Skipping launch attribute with empty key or value: %v", item),
+			)
 
 			continue
 		}
@@ -253,9 +304,10 @@ func injectLaunchAttributes(attrs []LaunchAttribute, requestID string) []LaunchA
 	out := make([]LaunchAttribute, 0, len(attrs)+2)
 	out = append(out, attrs...)
 
-	out = append(out, LaunchAttribute{Key: launchRequestIDAttrKey, Value: requestID})
+	out = append(out, LaunchAttribute{Key: LaunchRequestIDAttrKey, Value: requestID})
 
 	hasSkipped := false
+
 	for _, attr := range out {
 		if attr.Key == "skippedIsNotIssue" {
 			hasSkipped = true
@@ -364,7 +416,7 @@ func LaunchUIURL(meta *Metadata, launchID int64) string {
 // ExpandResultsGlob expands a results glob and returns absolute file paths.
 func ExpandResultsGlob(pattern string) ([]string, error) {
 	if strings.TrimSpace(pattern) == "" {
-		return nil, fmt.Errorf("--results is required")
+		return nil, errors.New("--results is required")
 	}
 
 	matches, err := filepath.Glob(pattern)
