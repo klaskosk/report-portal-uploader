@@ -60,15 +60,15 @@ func Run(ctx context.Context, runtime RuntimeConfig, logger *slog.Logger) (rpuse
 		LaunchURLFile:  launchURLFile,
 	}
 
-	result, runWarnings, err := rpusend.RunWithMetadata(ctx, meta, pipelineCfg, inputs, logger)
-	warnings = append(warnings, runWarnings...)
+	transformWarningMessages := warnings.Messages()
 
+	result, _, err := rpusend.RunWithMetadata(ctx, meta, pipelineCfg, inputs, logger)
 	if err != nil {
 		return rpusend.Result{}, fmt.Errorf("running upload pipeline: %w", err)
 	}
 
-	if len(warnings) > 0 {
-		result.Warnings = append(result.Warnings, warnings.Messages()...)
+	if len(transformWarningMessages) > 0 {
+		result.Warnings = append(transformWarningMessages, result.Warnings...)
 	}
 
 	return result, nil

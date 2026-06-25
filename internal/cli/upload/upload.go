@@ -1,7 +1,6 @@
 package upload
 
 import (
-	"context"
 	"fmt"
 	"os"
 
@@ -45,7 +44,7 @@ func newUploadCommand() *cobra.Command {
 
 			logger := core.LoggerFromCmd(cmd)
 
-			result, err := rpuupload.Run(context.Background(), cfg, logger)
+			result, err := rpuupload.Run(cmd.Context(), cfg, logger)
 			if err != nil {
 				return core.PrintAndReturnError(printer, err)
 			}

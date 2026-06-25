@@ -1,7 +1,6 @@
 package send
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -86,7 +85,7 @@ func runSendCommand(opts *sendOptions) func(*cobra.Command, []string) error {
 
 		logger := core.LoggerFromCmd(cmd)
 
-		result, err := rpusend.Run(context.Background(), cfg, logger)
+		result, err := rpusend.Run(cmd.Context(), cfg, logger)
 		if err != nil {
 			return core.PrintAndReturnError(printer, err)
 		}

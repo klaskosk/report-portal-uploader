@@ -362,7 +362,11 @@ func WaitForLaunchItems(
 		lastCount = testCount
 
 		if time.Now().After(deadline) {
-			return items, nil
+			return nil, fmt.Errorf(
+				"waiting for launch items: timed out after 2m with %d of %d expected test items",
+				testCount,
+				target,
+			)
 		}
 
 		select {

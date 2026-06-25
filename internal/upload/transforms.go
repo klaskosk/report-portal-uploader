@@ -1,17 +1,15 @@
 package upload
 
 import (
-	"bytes"
 	"encoding/xml"
-	"errors"
 	"fmt"
-	"io"
 	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
 	rpusend "github.com/klaskosk/report-portal-uploader/internal/send"
+	"github.com/klaskosk/report-portal-uploader/internal/xunit"
 )
 
 const (
@@ -19,14 +17,6 @@ const (
 	xmlTestcase  = "testcase"
 	xmlProperty  = "property"
 )
-
-type xUnitNode struct {
-	Name     xml.Name
-	Attrs    []xml.Attr
-	Children []*xUnitNode
-	Chars    string
-	Skip     bool
-}
 
 // TransformOptions configures the Layer 2 transform chain for one source file.
 type TransformOptions struct {
@@ -53,9 +43,9 @@ func ApplyLayer2Transforms(
 	input []byte,
 	opts TransformOptions,
 ) ([]byte, rpusend.WarningList, error) {
-	doc, err := parseXUnitDocument(input)
+	doc, err := xunit.ParseDocument(input)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("parsing document: %w", err)
 	}
 
 	var warnings rpusend.WarningList
@@ -65,9 +55,9 @@ func ApplyLayer2Transforms(
 	moveAttributesToProperties(doc)
 	normalizeTimeAttributes(doc, opts.SourcePath, &warnings)
 
-	output, err := encodeXUnitDocument(doc)
+	output, err := xunit.EncodeDocument(doc)
 	if err != nil {
-		return nil, warnings, err
+		return nil, warnings, fmt.Errorf("encoding document: %w", err)
 	}
 
 	return output, warnings, nil
@@ -80,7 +70,7 @@ func WorkdirName(source SourceFile) string {
 	return fmt.Sprintf("%d_%s_%s", source.Index, shortID, filepath.Base(source.Path))
 }
 
-func sanitizeSystemOutErr(node *xUnitNode) {
+func sanitizeSystemOutErr(node *xunit.Node) {
 	if node == nil || node.Skip {
 		return
 	}
@@ -127,7 +117,7 @@ func sanitizeSystemText(text string) string {
 	return builder.String()
 }
 
-func applyLaneLabeling(node *xUnitNode, lane, laneProperty string) {
+func applyLaneLabeling(node *xunit.Node, lane, laneProperty string) {
 	if lane == "" {
 		return
 	}
@@ -135,17 +125,17 @@ func applyLaneLabeling(node *xUnitNode, lane, laneProperty string) {
 	applyLaneLabelingWalk(node, lane, laneProperty)
 }
 
-func applyLaneLabelingWalk(node *xUnitNode, lane, laneProperty string) {
+func applyLaneLabelingWalk(node *xunit.Node, lane, laneProperty string) {
 	if node == nil || node.Skip {
 		return
 	}
 
 	if node.Name.Local == xmlTestsuite {
-		name := attrValue(node.Attrs, "name")
+		name := xunit.AttrValue(node.Attrs, "name")
 
 		prefix := "[" + lane + "] "
 		if name != "" && !strings.HasPrefix(name, prefix) {
-			setAttr(node, "name", prefix+name)
+			xunit.SetAttr(node, "name", prefix+name)
 		}
 
 		ensureProperty(node, laneProperty, lane)
@@ -156,7 +146,7 @@ func applyLaneLabelingWalk(node *xUnitNode, lane, laneProperty string) {
 	}
 }
 
-func moveAttributesToProperties(node *xUnitNode) {
+func moveAttributesToProperties(node *xunit.Node) {
 	if node == nil || node.Skip {
 		return
 	}
@@ -168,29 +158,29 @@ func moveAttributesToProperties(node *xUnitNode) {
 	}
 }
 
-func moveAttributesToPropertiesWalk(node *xUnitNode) {
+func moveAttributesToPropertiesWalk(node *xunit.Node) {
 	switch node.Name.Local {
 	case xmlTestcase:
-		if value := attrValue(node.Attrs, "status"); value != "" {
+		if value := xunit.AttrValue(node.Attrs, "status"); value != "" {
 			ensureProperty(node, "status", value)
-			node.Attrs = removeAttr(node.Attrs, "status")
+			node.Attrs = xunit.RemoveAttr(node.Attrs, "status")
 		}
 	case xmlTestsuite, "testsuites":
-		if value := attrValue(node.Attrs, "disabled"); value != "" {
+		if value := xunit.AttrValue(node.Attrs, "disabled"); value != "" {
 			ensureProperty(node, "disabled", value)
-			node.Attrs = removeAttr(node.Attrs, "disabled")
+			node.Attrs = xunit.RemoveAttr(node.Attrs, "disabled")
 		}
 	}
 
 	hoistResultChildren(node)
 }
 
-func hoistResultChildren(node *xUnitNode) {
+func hoistResultChildren(node *xunit.Node) {
 	if node == nil {
 		return
 	}
 
-	remaining := make([]*xUnitNode, 0, len(node.Children))
+	remaining := make([]*xunit.Node, 0, len(node.Children))
 	for _, child := range node.Children {
 		if child == nil || child.Skip {
 			continue
@@ -206,7 +196,7 @@ func hoistResultChildren(node *xUnitNode) {
 	node.Children = remaining
 }
 
-func hoistResultChild(parent, child *xUnitNode) bool {
+func hoistResultChild(parent, child *xunit.Node) bool {
 	switch child.Name.Local {
 	case "results_directory", "results_summary":
 		value := resultChildValue(child)
@@ -220,7 +210,7 @@ func hoistResultChild(parent, child *xUnitNode) bool {
 	}
 }
 
-func resultChildValue(child *xUnitNode) string {
+func resultChildValue(child *xunit.Node) string {
 	value := strings.TrimSpace(child.Chars)
 	if value != "" {
 		return value
@@ -240,20 +230,20 @@ func resultChildValue(child *xUnitNode) string {
 	return ""
 }
 
-func normalizeTimeAttributes(node *xUnitNode, sourcePath string, warnings *rpusend.WarningList) {
+func normalizeTimeAttributes(node *xunit.Node, sourcePath string, warnings *rpusend.WarningList) {
 	if node == nil || node.Skip {
 		return
 	}
 
 	if node.Name.Local == xmlTestsuite || node.Name.Local == xmlTestcase {
-		timeValue := attrValue(node.Attrs, "time")
+		timeValue := xunit.AttrValue(node.Attrs, "time")
 		if timeValue == "" {
 			return
 		}
 
 		_, err := strconv.ParseFloat(strings.ReplaceAll(timeValue, ",", ""), 64)
 		if err != nil {
-			setAttr(node, "time", "0.0")
+			xunit.SetAttr(node, "time", "0.0")
 			elementPath := elementPathForNode(node)
 			warnings.Add(
 				"transform",
@@ -272,12 +262,12 @@ func normalizeTimeAttributes(node *xUnitNode, sourcePath string, warnings *rpuse
 	}
 }
 
-func elementPathForNode(node *xUnitNode) string {
+func elementPathForNode(node *xunit.Node) string {
 	if node == nil {
 		return ""
 	}
 
-	name := attrValue(node.Attrs, "name")
+	name := xunit.AttrValue(node.Attrs, "name")
 	if name == "" {
 		return node.Name.Local
 	}
@@ -285,19 +275,19 @@ func elementPathForNode(node *xUnitNode) string {
 	return node.Name.Local + "[@name=" + name + "]"
 }
 
-func ensureProperty(node *xUnitNode, name, value string) {
+func ensureProperty(node *xunit.Node, name, value string) {
 	properties := findOrCreateProperties(node)
 	for _, child := range properties.Children {
 		if child != nil && !child.Skip && child.Name.Local == xmlProperty {
-			if attrValue(child.Attrs, "name") == name {
-				setAttr(child, "value", value)
+			if xunit.AttrValue(child.Attrs, "name") == name {
+				xunit.SetAttr(child, "value", value)
 
 				return
 			}
 		}
 	}
 
-	properties.Children = append(properties.Children, &xUnitNode{
+	properties.Children = append(properties.Children, &xunit.Node{
 		Name: xml.Name{Local: xmlProperty},
 		Attrs: []xml.Attr{
 			{Name: xml.Name{Local: "name"}, Value: name},
@@ -306,160 +296,15 @@ func ensureProperty(node *xUnitNode, name, value string) {
 	})
 }
 
-func findOrCreateProperties(node *xUnitNode) *xUnitNode {
+func findOrCreateProperties(node *xunit.Node) *xunit.Node {
 	for _, child := range node.Children {
 		if child != nil && !child.Skip && child.Name.Local == "properties" {
 			return child
 		}
 	}
 
-	properties := &xUnitNode{Name: xml.Name{Local: "properties"}}
+	properties := &xunit.Node{Name: xml.Name{Local: "properties"}}
 	node.Children = append(node.Children, properties)
 
 	return properties
-}
-
-func parseXUnitDocument(input []byte) (*xUnitNode, error) {
-	decoder := xml.NewDecoder(bytes.NewReader(input))
-
-	var (
-		root  *xUnitNode
-		stack []*xUnitNode
-	)
-
-	for {
-		token, err := decoder.Token()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-
-		if err != nil {
-			return nil, fmt.Errorf("parsing XML: %w", err)
-		}
-
-		root, stack = appendXUnitToken(root, stack, token)
-	}
-
-	if root == nil {
-		return nil, errors.New("empty XML document")
-	}
-
-	return root, nil
-}
-
-func appendXUnitToken(
-	root *xUnitNode,
-	stack []*xUnitNode,
-	token xml.Token,
-) (*xUnitNode, []*xUnitNode) {
-	switch element := token.(type) {
-	case xml.StartElement:
-		node := &xUnitNode{Name: element.Name, Attrs: append([]xml.Attr{}, element.Attr...)}
-		if len(stack) == 0 {
-			root = node
-		} else {
-			parent := stack[len(stack)-1]
-			parent.Children = append(parent.Children, node)
-		}
-
-		return root, append(stack, node)
-	case xml.EndElement:
-		if len(stack) > 0 {
-			stack = stack[:len(stack)-1]
-		}
-	case xml.CharData:
-		if len(stack) > 0 {
-			stack[len(stack)-1].Chars += string(element)
-		}
-	}
-
-	return root, stack
-}
-
-func encodeXUnitDocument(root *xUnitNode) ([]byte, error) {
-	var buf bytes.Buffer
-	buf.WriteString(xml.Header)
-
-	encoder := xml.NewEncoder(&buf)
-	encoder.Indent("", "  ")
-
-	err := writeNode(encoder, root)
-	if err != nil {
-		return nil, err
-	}
-
-	err = encoder.Flush()
-	if err != nil {
-		return nil, fmt.Errorf("flushing XML encoder: %w", err)
-	}
-
-	return buf.Bytes(), nil
-}
-
-func writeNode(encoder *xml.Encoder, node *xUnitNode) error {
-	if node.Skip {
-		return nil
-	}
-
-	start := xml.StartElement{Name: node.Name, Attr: node.Attrs}
-
-	err := encoder.EncodeToken(start)
-	if err != nil {
-		return fmt.Errorf("encoding XML start element: %w", err)
-	}
-
-	chars := strings.TrimSpace(node.Chars)
-	if chars != "" {
-		err = encoder.EncodeToken(xml.CharData(chars))
-		if err != nil {
-			return fmt.Errorf("encoding XML character data: %w", err)
-		}
-	}
-
-	for _, child := range node.Children {
-		err = writeNode(encoder, child)
-		if err != nil {
-			return err
-		}
-	}
-
-	err = encoder.EncodeToken(start.End())
-	if err != nil {
-		return fmt.Errorf("encoding XML end element: %w", err)
-	}
-
-	return nil
-}
-
-func attrValue(attrs []xml.Attr, name string) string {
-	for _, attr := range attrs {
-		if attr.Name.Local == name {
-			return attr.Value
-		}
-	}
-
-	return ""
-}
-
-func setAttr(node *xUnitNode, name, value string) {
-	for i, attr := range node.Attrs {
-		if attr.Name.Local == name {
-			node.Attrs[i].Value = value
-
-			return
-		}
-	}
-
-	node.Attrs = append(node.Attrs, xml.Attr{Name: xml.Name{Local: name}, Value: value})
-}
-
-func removeAttr(attrs []xml.Attr, name string) []xml.Attr {
-	out := make([]xml.Attr, 0, len(attrs))
-	for _, attr := range attrs {
-		if attr.Name.Local != name {
-			out = append(out, attr)
-		}
-	}
-
-	return out
 }
