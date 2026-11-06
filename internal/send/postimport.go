@@ -15,6 +15,19 @@ import (
 
 const postImportConcurrency = 10
 
+var (
+	waitForLaunchItemsTimeout      = 2 * time.Minute
+	waitForLaunchItemsPollInterval = 2 * time.Second
+	waitForLaunchItemsTimingMu     sync.RWMutex
+)
+
+func waitForLaunchItemsTiming() (time.Duration, time.Duration) {
+	waitForLaunchItemsTimingMu.RLock()
+	defer waitForLaunchItemsTimingMu.RUnlock()
+
+	return waitForLaunchItemsTimeout, waitForLaunchItemsPollInterval
+}
+
 // RPPostImportAPI abstracts post-import item and log operations.
 type RPPostImportAPI interface {
 	ListLaunchItems(
@@ -332,7 +345,8 @@ func WaitForLaunchItems(
 	launchID int64,
 	expectedTestItems int,
 ) ([]types.TestItemResource, error) {
-	deadline := time.Now().Add(2 * time.Minute)
+	timeout, pollInterval := waitForLaunchItemsTiming()
+	deadline := time.Now().Add(timeout)
 
 	target := expectedTestItems
 	if target == 0 {
@@ -363,7 +377,8 @@ func WaitForLaunchItems(
 
 		if time.Now().After(deadline) {
 			return nil, fmt.Errorf(
-				"waiting for launch items: timed out after 2m with %d of %d expected test items",
+				"waiting for launch items: timed out after %v with %d of %d expected test items",
+				timeout,
 				testCount,
 				target,
 			)
@@ -372,7 +387,7 @@ func WaitForLaunchItems(
 		select {
 		case <-ctx.Done():
 			return nil, fmt.Errorf("waiting for launch items: %w", ctx.Err())
-		case <-time.After(2 * time.Second):
+		case <-time.After(pollInterval):
 		}
 	}
 }

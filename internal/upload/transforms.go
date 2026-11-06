@@ -1,7 +1,6 @@
 package upload
 
 import (
-	"encoding/xml"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -15,7 +14,6 @@ import (
 const (
 	xmlTestsuite = "testsuite"
 	xmlTestcase  = "testcase"
-	xmlProperty  = "property"
 )
 
 // TransformOptions configures the Layer 2 transform chain for one source file.
@@ -138,7 +136,7 @@ func applyLaneLabelingWalk(node *xunit.Node, lane, laneProperty string) {
 			xunit.SetAttr(node, "name", prefix+name)
 		}
 
-		ensureProperty(node, laneProperty, lane)
+		xunit.EnsureProperty(node, laneProperty, lane)
 	}
 
 	for _, child := range node.Children {
@@ -162,12 +160,12 @@ func moveAttributesToPropertiesWalk(node *xunit.Node) {
 	switch node.Name.Local {
 	case xmlTestcase:
 		if value := xunit.AttrValue(node.Attrs, "status"); value != "" {
-			ensureProperty(node, "status", value)
+			xunit.EnsureProperty(node, "status", value)
 			node.Attrs = xunit.RemoveAttr(node.Attrs, "status")
 		}
 	case xmlTestsuite, "testsuites":
 		if value := xunit.AttrValue(node.Attrs, "disabled"); value != "" {
-			ensureProperty(node, "disabled", value)
+			xunit.EnsureProperty(node, "disabled", value)
 			node.Attrs = xunit.RemoveAttr(node.Attrs, "disabled")
 		}
 	}
@@ -201,7 +199,7 @@ func hoistResultChild(parent, child *xunit.Node) bool {
 	case "results_directory", "results_summary":
 		value := resultChildValue(child)
 		if value != "" {
-			ensureProperty(parent, child.Name.Local, value)
+			xunit.EnsureProperty(parent, child.Name.Local, value)
 		}
 
 		return true
@@ -244,7 +242,7 @@ func normalizeTimeAttributes(node *xunit.Node, sourcePath string, warnings *rpus
 		_, err := strconv.ParseFloat(strings.ReplaceAll(timeValue, ",", ""), 64)
 		if err != nil {
 			xunit.SetAttr(node, "time", "0.0")
-			elementPath := elementPathForNode(node)
+			elementPath := xunit.ElementPath(node)
 			warnings.Add(
 				"transform",
 				fmt.Sprintf(
@@ -260,51 +258,4 @@ func normalizeTimeAttributes(node *xunit.Node, sourcePath string, warnings *rpus
 	for _, child := range node.Children {
 		normalizeTimeAttributes(child, sourcePath, warnings)
 	}
-}
-
-func elementPathForNode(node *xunit.Node) string {
-	if node == nil {
-		return ""
-	}
-
-	name := xunit.AttrValue(node.Attrs, "name")
-	if name == "" {
-		return node.Name.Local
-	}
-
-	return node.Name.Local + "[@name=" + name + "]"
-}
-
-func ensureProperty(node *xunit.Node, name, value string) {
-	properties := findOrCreateProperties(node)
-	for _, child := range properties.Children {
-		if child != nil && !child.Skip && child.Name.Local == xmlProperty {
-			if xunit.AttrValue(child.Attrs, "name") == name {
-				xunit.SetAttr(child, "value", value)
-
-				return
-			}
-		}
-	}
-
-	properties.Children = append(properties.Children, &xunit.Node{
-		Name: xml.Name{Local: xmlProperty},
-		Attrs: []xml.Attr{
-			{Name: xml.Name{Local: "name"}, Value: name},
-			{Name: xml.Name{Local: "value"}, Value: value},
-		},
-	})
-}
-
-func findOrCreateProperties(node *xunit.Node) *xunit.Node {
-	for _, child := range node.Children {
-		if child != nil && !child.Skip && child.Name.Local == "properties" {
-			return child
-		}
-	}
-
-	properties := &xunit.Node{Name: xml.Name{Local: "properties"}}
-	node.Children = append(node.Children, properties)
-
-	return properties
 }
