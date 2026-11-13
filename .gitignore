@@ -32,6 +32,7 @@ go.work.sum
 # .vscode/
 
 # local binaries
+/rpu
 bin/
 
 # stored plans
