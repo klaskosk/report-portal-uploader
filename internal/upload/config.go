@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -155,8 +154,11 @@ func (cfg *Config) EffectivePropertyFilter() []string {
 }
 
 func validateCLIPath(path string) error {
-	clean := filepath.Clean(path)
-	if strings.Contains(clean, "..") {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("invalid path %q", path)
+	}
+
+	if strings.Contains(path, "\x00") {
 		return fmt.Errorf("invalid path %q", path)
 	}
 
