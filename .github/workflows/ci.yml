@@ -31,12 +31,12 @@ jobs:
       - name: Lint (root module)
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.12.2
+          version: v2.15.0
 
       - name: Lint (test/integration module)
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.12.2
+          version: v2.15.0
           working-directory: test/integration
 
       - name: Run unit tests
