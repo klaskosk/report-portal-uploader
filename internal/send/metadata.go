@@ -238,8 +238,11 @@ func compilePropertyFilters(patterns []string) ([]*regexp.Regexp, error) {
 
 // compileFullStringPattern wraps pattern for Java String.matches() semantics (RE2 full-string match).
 func validateCLIPath(path string) error {
-	clean := filepath.Clean(path)
-	if strings.Contains(clean, "..") {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("invalid path %q", path)
+	}
+
+	if strings.Contains(path, "\x00") {
 		return fmt.Errorf("invalid path %q", path)
 	}
 
@@ -436,7 +439,12 @@ func ExpandResultsGlob(pattern string) ([]string, error) {
 		}
 
 		if !info.IsDir() {
-			out = append(out, match)
+			abs, err := filepath.Abs(match)
+			if err != nil {
+				return nil, fmt.Errorf("resolving results file %q: %w", match, err)
+			}
+
+			out = append(out, abs)
 		}
 	}
 
