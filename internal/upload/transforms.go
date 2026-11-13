@@ -63,7 +63,7 @@ func ApplyLayer2Transforms(
 
 // WorkdirName returns a unique internal filename for a source file record.
 func WorkdirName(source SourceFile) string {
-	shortID := strings.Split(uuid.NewString(), "-")[0]
+	shortID, _, _ := strings.Cut(uuid.NewString(), "-")
 
 	return fmt.Sprintf("%d_%s_%s", source.Index, shortID, filepath.Base(source.Path))
 }
