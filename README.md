@@ -16,6 +16,7 @@ Both commands share the same import and post-import pipeline.
 ## Prerequisites
 
 - Go 1.27+ (for building) or the prebuilt `bin/rpu` binary.
+- podman (optional; only for building or using the container image).
 - A Report Portal project with the `junit` import plugin enabled.
 - A Report Portal API token with permission to create imports in that project.
 
@@ -41,6 +42,73 @@ make test-integration          # requires Docker + a Report Portal instance
 make lint                      # golangci-lint --fix (root + test/integration)
 make tidy
 ```
+
+### Container image
+
+The binary is also published as a container image, which is usually easier to
+consume from CI than a loose binary. It is rebuilt on every commit to `main`:
+
+```bash
+podman pull quay.io/rh-ee-klaskosk/report-portal-uploader:latest
+```
+
+The image contains only the statically linked `rpu` binary on top of UBI 9
+micro (`registry.access.redhat.com/ubi9/ubi-micro`). `/work` is the image's
+working directory, so mount the directory holding your config and results there
+and pass the token with `REPORTPORTAL_TOKEN`:
+
+```bash
+podman run --rm \
+  -e REPORTPORTAL_TOKEN \
+  -v "$PWD:/work:ro,z" \
+  quay.io/rh-ee-klaskosk/report-portal-uploader:latest \
+  upload --config /work/config.toml
+```
+
+`rpu send` works the same way:
+
+```bash
+podman run --rm \
+  -e REPORTPORTAL_TOKEN \
+  -v "$PWD:/work:ro,z" \
+  quay.io/rh-ee-klaskosk/report-portal-uploader:latest \
+  send --metadata /work/metadata.json --results '/work/results/*.xml'
+```
+
+Notes:
+
+- The `z` on the mount relabels it for SELinux; it is required on enforcing
+  hosts (RHEL, Fedora, CentOS Stream) and ignored elsewhere. Use `:Z` instead
+  when the directory is used by this container only.
+- Relative `[[sources]].path` and `--results` patterns resolve against `/work`;
+  use absolute in-container paths for anything mounted elsewhere.
+- The mounts above are read-only. Drop `:ro` when `output.launch_url_file` has
+  to be written back to the host.
+- The image runs as UID 0 so bind mounts behave (config files with restrictive
+  permissions, writing results back). Under rootless podman container UID 0 is
+  your own user, so nothing is created as root on the host. Pass `--user 1001:0`
+  if you want a non-root process and the mount is world-readable.
+- The work directory (`/tmp/rpu-workdir-*`) lives inside the container;
+  `--keep-workdir` only keeps it until the container exits.
+- `podman run <image>` with no arguments prints `rpu --help`.
+- Exit status, stdout, and stderr are unchanged from running `rpu` directly, so
+  `--json` / `--output` pipelines keep working.
+
+Rebuild and publish by hand:
+
+```bash
+make image       # podman build -t quay.io/rh-ee-klaskosk/report-portal-uploader:latest .
+make image-push
+```
+
+`.github/workflows/container-image.yaml` builds the image on every push to
+`main` (and only then) and pushes `:latest` plus a `:sha-<commit>` tag; the
+commit SHA and image digest are written to the workflow run summary. It
+authenticates with the `QUAY_USERNAME` and `QUAY_TOKEN` repository secrets (a
+Quay robot account token with write access to
+`rh-ee-klaskosk/report-portal-uploader`). The Quay repository must already exist
+(Quay does not create it on push) and must be public, or whatever pulls the
+image has to log in to Quay first.
 
 ---
 
@@ -438,6 +506,8 @@ make test-integration   # cd test/integration && go test -tags=integration -v ./
 1. `golangci-lint v2.15.0` on root and on `test/integration`.
 2. `make test` (unit).
 3. Integration tests with coverage and Ginkgo JSON report (`-ginkgo.json-report=integration-report.json`), then a step that fails if any spec is not `passed`.
+
+`.github/workflows/container-image.yaml` builds the UBI 9 micro image on `push` to `main` only and pushes it to Quay (`:latest` and `:sha-<commit>`).
 
 ### Linting and formatting
 
