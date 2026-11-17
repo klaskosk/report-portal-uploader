@@ -52,10 +52,11 @@ consume from CI than a loose binary. It is rebuilt on every commit to `main`:
 podman pull quay.io/rh-ee-klaskosk/report-portal-uploader:latest
 ```
 
-The image carries the statically linked `rpu` binary on top of UBI 9 minimal
-(`registry.access.redhat.com/ubi9/ubi-minimal`), with no compilers or Go
-toolchain. `/work` is the image's working directory, so mount the directory
-holding your config and results there and pass the token with
+The image carries the statically linked `rpu` binary on top of UBI 9 micro
+(`registry.access.redhat.com/ubi9/ubi-micro`), plus the CA bundle copied in
+from `ubi9/ubi-minimal` so HTTPS works. There is no package manager, compiler,
+or Go toolchain. `/work` is the image's working directory, so mount the
+directory holding your config and results there and pass the token with
 `REPORTPORTAL_TOKEN`:
 
 ```bash
@@ -96,11 +97,25 @@ Notes:
   Go's own TLS stack rather than OpenSSL, so it does not run in OpenSSL FIPS
   mode, and panic traces carry no symbol names. Both are deliberate for a
   batch CLI; build from source with different flags if you need otherwise.
-- The image is built on UBI 9 minimal rather than UBI 9 micro purely for the CA
-  trust store: `ubi-micro` ships no `/etc/pki/tls/certs/ca-bundle.crt`, so
-  every HTTPS request to Report Portal fails with `x509: certificate signed by
-  unknown authority`. To trust a private CA, mount a PEM bundle and point
-  `SSL_CERT_FILE` at it.
+- `ubi-micro` ships no CA bundle, so the image copies `tls-ca-bundle.pem` from
+  `ubi9/ubi-minimal` to `/etc/pki/tls/certs/ca-bundle.crt` (the path Go reads
+  first) and `/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem`. Those are the
+  public roots. If Report Portal is behind a private CA, point `SSL_CERT_FILE`
+  at a bundle containing it; that is additive, since Go still scans
+  `/etc/pki/tls/certs`, so public endpoints keep working:
+
+  ```bash
+  podman run --rm \
+    -e REPORTPORTAL_TOKEN \
+    -e SSL_CERT_FILE=/work/private-ca.pem \
+    -v "$PWD:/work:ro,z" \
+    quay.io/rh-ee-klaskosk/report-portal-uploader:latest \
+    upload --config /work/config.toml
+  ```
+
+  Mounting a file over `/etc/pki/tls/certs/ca-bundle.crt` also works, but that
+  is the image's only bundle: overriding it drops the public roots, so the
+  mounted file has to contain them as well.
 - The work directory (`/tmp/rpu-workdir-*`) lives inside the container;
   `--keep-workdir` only keeps it until the container exits.
 - `podman run <image>` with no arguments prints `rpu --help`.
@@ -520,7 +535,7 @@ make test-integration   # cd test/integration && go test -tags=integration -v ./
 2. `make test` (unit).
 3. Integration tests with coverage and Ginkgo JSON report (`-ginkgo.json-report=integration-report.json`), then a step that fails if any spec is not `passed`.
 
-`.github/workflows/container-image.yaml` builds the UBI 9 minimal image on `push` to `main` only and pushes it to Quay (`:latest` and `:sha-<commit>`).
+`.github/workflows/container-image.yaml` builds the UBI 9 micro image on `push` to `main` only and pushes it to Quay (`:latest` and `:sha-<commit>`).
 
 ### Linting and formatting
 

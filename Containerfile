@@ -1,7 +1,7 @@
 # Container image for report-portal-uploader (rpu).
 #
-# The final image carries the statically linked rpu binary on top of UBI 9
-# minimal, so CI can distribute it as a container instead of a raw binary:
+# The final image carries only the statically linked rpu binary, plus the CA
+# trust store it needs for HTTPS, on top of UBI 9 micro:
 #
 #   podman run --rm -e REPORTPORTAL_TOKEN -v "$PWD:/work:ro,z" \
 #     quay.io/rh-ee-klaskosk/report-portal-uploader:latest \
@@ -27,7 +27,7 @@ RUN go mod download
 
 COPY . .
 
-# Static build: ubi-minimal provides no Go runtime and we do not want a libc
+# Static build: ubi-micro provides no Go runtime and we do not want a libc
 # dependency. TARGETOS/TARGETARCH keep this Containerfile cross-buildable.
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
@@ -35,12 +35,19 @@ ARG TARGETARCH=amd64
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /tmp/rpu ./cmd/rpu
 
-# Runtime stage: UBI 9 minimal (no compilers, no Go toolchain). It is ~80 MB
-# larger than ubi-micro, which is the price of the CA trust store: ubi-micro
-# ships no /etc/pki/tls/certs/ca-bundle.crt at all, and rpu talks to Report
-# Portal over HTTPS, so with ubi-micro every request fails with
-# "x509: certificate signed by unknown authority".
-FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
+# Trust stage. ubi-micro ships no CA trust store at all, so every HTTPS call to
+# Report Portal would fail with "x509: certificate signed by unknown
+# authority". ubi-minimal carries the bundle; borrow just the two paths Go and
+# curl look at instead of shipping the whole (much larger) base.
+#
+# To trust a private CA, point SSL_CERT_FILE at a bundle containing it: Go
+# still scans /etc/pki/tls/certs, so the public roots keep working. Mounting a
+# combined public+private bundle over /etc/pki/tls/certs/ca-bundle.crt also
+# works, but replaces the public roots instead of adding to them.
+FROM registry.access.redhat.com/ubi9/ubi-minimal:latest AS trust
+
+# Runtime stage: UBI 9 micro (no package manager, no compilers, minimal footprint).
+FROM registry.access.redhat.com/ubi9/ubi-micro:latest
 
 LABEL org.opencontainers.image.title="report-portal-uploader" \
       org.opencontainers.image.description="Upload xUnit/JUnit results to Report Portal" \
@@ -48,6 +55,13 @@ LABEL org.opencontainers.image.title="report-portal-uploader" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 COPY --from=build /tmp/rpu /usr/bin/rpu
+
+# Both paths crypto/x509 looks at, copied as real files so neither depends on
+# the other being present or on a symlink resolving.
+COPY --from=trust /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem \
+                  /etc/pki/tls/certs/ca-bundle.crt
+COPY --from=trust /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem \
+                  /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
 
 # rpu is a one-shot batch CLI: it writes only to /tmp and to paths the caller
 # mounts. UID 1001 / GID 0 matches the OpenShift arbitrary-UID model and keeps
