@@ -53,8 +53,6 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Write image summary
-        env:
-          VERSION: ${{ steps.meta.outputs.version }}
         run: |
           {
             echo "### report-portal-uploader image"
@@ -62,6 +60,6 @@ jobs:
             echo "| Field | Value |"
             echo "|---|---|"
             echo "| Commit | \`${{ github.sha }}\` |"
-            echo "| Tags | \`latest\`, \`sha-${VERSION}\` |"
+            echo "| Tags | \`latest\`, \`sha-${GITHUB_SHA::7}\` |"
             echo "| Digest | \`${{ steps.build.outputs.digest }}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
