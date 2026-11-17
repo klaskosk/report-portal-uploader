@@ -52,10 +52,11 @@ consume from CI than a loose binary. It is rebuilt on every commit to `main`:
 podman pull quay.io/rh-ee-klaskosk/report-portal-uploader:latest
 ```
 
-The image contains only the statically linked `rpu` binary on top of UBI 9
-micro (`registry.access.redhat.com/ubi9/ubi-micro`). `/work` is the image's
-working directory, so mount the directory holding your config and results there
-and pass the token with `REPORTPORTAL_TOKEN`:
+The image carries the statically linked `rpu` binary on top of UBI 9 minimal
+(`registry.access.redhat.com/ubi9/ubi-minimal`), with no compilers or Go
+toolchain. `/work` is the image's working directory, so mount the directory
+holding your config and results there and pass the token with
+`REPORTPORTAL_TOKEN`:
 
 ```bash
 podman run --rm \
@@ -84,10 +85,22 @@ Notes:
   use absolute in-container paths for anything mounted elsewhere.
 - The mounts above are read-only. Drop `:ro` when `output.launch_url_file` has
   to be written back to the host.
-- The image runs as UID 0 so bind mounts behave (config files with restrictive
-  permissions, writing results back). Under rootless podman container UID 0 is
-  your own user, so nothing is created as root on the host. Pass `--user 1001:0`
-  if you want a non-root process and the mount is world-readable.
+- The image runs as UID 1001 with GID 0, which is also what OpenShift assigns,
+  so `runAsNonRoot` policies accept it. Under rootless podman GID 0 is your own
+  group, so the mounted directory only needs to be group-readable. Add
+  `--user 0` when the mount is root-only instead: a `0600` config, or a
+  directory you cannot write when `output.launch_url_file` is set. Under
+  rootless podman container UID 0 is your own user, so nothing is created as
+  root on the host.
+- The binary is built `CGO_ENABLED=0` and stripped (`-ldflags="-s -w"`): it uses
+  Go's own TLS stack rather than OpenSSL, so it does not run in OpenSSL FIPS
+  mode, and panic traces carry no symbol names. Both are deliberate for a
+  batch CLI; build from source with different flags if you need otherwise.
+- The image is built on UBI 9 minimal rather than UBI 9 micro purely for the CA
+  trust store: `ubi-micro` ships no `/etc/pki/tls/certs/ca-bundle.crt`, so
+  every HTTPS request to Report Portal fails with `x509: certificate signed by
+  unknown authority`. To trust a private CA, mount a PEM bundle and point
+  `SSL_CERT_FILE` at it.
 - The work directory (`/tmp/rpu-workdir-*`) lives inside the container;
   `--keep-workdir` only keeps it until the container exits.
 - `podman run <image>` with no arguments prints `rpu --help`.
@@ -97,8 +110,8 @@ Notes:
 Rebuild and publish by hand:
 
 ```bash
-make image       # podman build -t quay.io/rh-ee-klaskosk/report-portal-uploader:latest .
-make image-push
+make image       # podman build -t quay.io/rh-ee-klaskosk/report-portal-uploader:dev .
+make image-push  # TAG=... to override; local builds default to :dev, not :latest
 ```
 
 `.github/workflows/container-image.yaml` builds the image on every push to
@@ -507,7 +520,7 @@ make test-integration   # cd test/integration && go test -tags=integration -v ./
 2. `make test` (unit).
 3. Integration tests with coverage and Ginkgo JSON report (`-ginkgo.json-report=integration-report.json`), then a step that fails if any spec is not `passed`.
 
-`.github/workflows/container-image.yaml` builds the UBI 9 micro image on `push` to `main` only and pushes it to Quay (`:latest` and `:sha-<commit>`).
+`.github/workflows/container-image.yaml` builds the UBI 9 minimal image on `push` to `main` only and pushes it to Quay (`:latest` and `:sha-<commit>`).
 
 ### Linting and formatting
 

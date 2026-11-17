@@ -3,7 +3,7 @@ BUILD_DIR := bin
 CMD_DIR   := ./cmd/rpu
 
 IMAGE ?= quay.io/rh-ee-klaskosk/report-portal-uploader
-TAG   ?= latest
+TAG   ?= dev
 
 .DEFAULT_GOAL := help
 
