@@ -3,6 +3,12 @@ name: Container image
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - ".claude/**"
+      - ".cursor/**"
+      - "**/*.md"
 
 permissions:
   contents: read
@@ -11,8 +17,81 @@ env:
   IMAGE: ${{ vars.IMAGE || 'quay.io/rh-ee-klaskosk/report-portal-uploader' }}
 
 jobs:
+  pull-request:
+    name: Build and smoke-test image
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Containerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: rpu:pull-request
+          provenance: false
+          sbom: false
+          cache-from: type=gha
+
+      - name: Verify container entrypoint
+        run: docker run --rm rpu:pull-request --help
+
+      - name: Smoke-test HTTPS from the container
+        env:
+          SMOKE_DIR: ${{ runner.temp }}/rpu-container-smoke
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$SMOKE_DIR"
+          cat > "$SMOKE_DIR/config.toml" <<'EOF'
+          [report_portal]
+          hostname = "https://example.com"
+          project = "container-ci-smoke"
+
+          [launch]
+          name = "container-ci-smoke"
+
+          [[sources]]
+          path = "results.xml"
+          EOF
+          cat > "$SMOKE_DIR/results.xml" <<'EOF'
+          <testsuite name="container-ci-smoke">
+            <testcase name="https"/>
+          </testsuite>
+          EOF
+          chmod 0755 "$SMOKE_DIR"
+          chmod 0644 "$SMOKE_DIR/config.toml" "$SMOKE_DIR/results.xml"
+
+          set +e
+          smoke_output=$(docker run --rm \
+            -e REPORTPORTAL_TOKEN=dummy-token \
+            -v "$SMOKE_DIR:/work:ro" \
+            rpu:pull-request \
+            upload --config /work/config.toml --http-timeout 30s --json 2>&1)
+          smoke_status=$?
+          set -e
+
+          printf '%s\n' "$smoke_output"
+          if [[ "$smoke_status" -eq 0 ]]; then
+            echo "The HTTPS smoke test unexpectedly succeeded." >&2
+            exit 1
+          fi
+          if printf '%s\n' "$smoke_output" | grep -Eqi 'x509:|certificate signed by unknown authority|tls:'; then
+            echo "The container reached the HTTPS check but could not establish trusted TLS." >&2
+            exit 1
+          fi
+
   publish:
     name: Build and publish image
+    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
