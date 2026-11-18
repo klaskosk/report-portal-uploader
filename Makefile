@@ -2,6 +2,9 @@ BINARY    := rpu
 BUILD_DIR := bin
 CMD_DIR   := ./cmd/rpu
 
+IMAGE ?= quay.io/rh-ee-klaskosk/report-portal-uploader
+TAG   ?= dev
+
 .DEFAULT_GOAL := help
 
 .PHONY: build
@@ -11,6 +14,14 @@ build: ## Build the rpu binary
 .PHONY: build-static-linux-amd64
 build-static-linux-amd64: ## Build a static linux/amd64 binary
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o $(BUILD_DIR)/$(BINARY) $(CMD_DIR)
+
+.PHONY: image
+image: ## Build the container image with podman
+	podman build -f Containerfile -t $(IMAGE):$(TAG) .
+
+.PHONY: image-push
+image-push: image ## Build and push the container image
+	podman push $(IMAGE):$(TAG)
 
 .PHONY: test-unit
 test-unit: ## Run unit tests
