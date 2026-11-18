@@ -14,8 +14,8 @@ import (
 type fakeImportAPI struct {
 	importResponse map[string]any
 	importErr      error
-	latest         *types.PageLaunchResource
-	launch         *types.LaunchResource
+	latest         *types.PageLaunchViewModel
+	launch         *types.LaunchViewModel
 }
 
 func (fake *fakeImportAPI) ImportJUnit(
@@ -29,14 +29,14 @@ func (fake *fakeImportAPI) ImportJUnit(
 func (fake *fakeImportAPI) GetLatestByName(
 	_ context.Context,
 	_, _ string,
-) (*types.PageLaunchResource, error) {
+) (*types.PageLaunchViewModel, error) {
 	return fake.latest, nil
 }
 
 func (fake *fakeImportAPI) GetLaunchByUUID(
 	_ context.Context,
 	_, _ string,
-) (*types.LaunchResource, error) {
+) (*types.LaunchViewModel, error) {
 	return fake.launch, nil
 }
 
@@ -66,7 +66,7 @@ func TestRunImport_successPath(t *testing.T) {
 		importResponse: map[string]any{
 			"data": map[string]any{"id": "uuid-1"},
 		},
-		launch: &types.LaunchResource{Id: 42, Uuid: "uuid-1"},
+		launch: &types.LaunchViewModel{Id: 42, Uuid: "uuid-1"},
 	}
 
 	result, _, err := send.RunImport(context.Background(), api, meta, "results.zip")
@@ -88,7 +88,7 @@ func TestRunImport_504RecoveryByRequestID(t *testing.T) {
 	key := send.LaunchRequestIDAttrKey
 	value := "req-504"
 	now := time.Now()
-	launches := []types.LaunchResource{{
+	launches := []types.LaunchViewModel{{
 		Id:   99,
 		Uuid: "recovered-uuid",
 		Attributes: &[]types.ItemAttributeResource{{
@@ -100,8 +100,8 @@ func TestRunImport_504RecoveryByRequestID(t *testing.T) {
 
 	api := &fakeImportAPI{
 		importErr: &send.GatewayTimeoutError{Err: errors.New("HTTP 504 Gateway Timeout")},
-		latest:    &types.PageLaunchResource{Content: &launches},
-		launch:    &types.LaunchResource{Id: 99, Uuid: "recovered-uuid"},
+		latest:    &types.PageLaunchViewModel{Content: &launches},
+		launch:    &types.LaunchViewModel{Id: 99, Uuid: "recovered-uuid"},
 	}
 
 	result, _, err := send.RunImport(context.Background(), api, meta, "results.zip")
@@ -120,7 +120,7 @@ func TestRunImport_504RecoveryTimeWindowFallback(t *testing.T) {
 	}
 
 	now := time.Now()
-	launches := []types.LaunchResource{{
+	launches := []types.LaunchViewModel{{
 		Id:           77,
 		Uuid:         "recent-uuid",
 		LastModified: &now,
@@ -128,8 +128,8 @@ func TestRunImport_504RecoveryTimeWindowFallback(t *testing.T) {
 
 	api := &fakeImportAPI{
 		importResponse: map[string]any{"data": map[string]any{"id": ""}},
-		latest:         &types.PageLaunchResource{Content: &launches},
-		launch:         &types.LaunchResource{Id: 77, Uuid: "recent-uuid"},
+		latest:         &types.PageLaunchViewModel{Content: &launches},
+		launch:         &types.LaunchViewModel{Id: 77, Uuid: "recent-uuid"},
 	}
 
 	result, _, err := send.RunImport(context.Background(), api, meta, "results.zip")
@@ -148,7 +148,7 @@ func TestRunImport_504RecoveryRejectsStaleLaunch(t *testing.T) {
 	}
 
 	stale := time.Now().Add(-2 * time.Minute)
-	launches := []types.LaunchResource{{
+	launches := []types.LaunchViewModel{{
 		Id:           77,
 		Uuid:         "stale-uuid",
 		LastModified: &stale,
@@ -156,7 +156,7 @@ func TestRunImport_504RecoveryRejectsStaleLaunch(t *testing.T) {
 
 	api := &fakeImportAPI{
 		importErr: &send.GatewayTimeoutError{Err: errors.New("HTTP 504 Gateway Timeout")},
-		latest:    &types.PageLaunchResource{Content: &launches},
+		latest:    &types.PageLaunchViewModel{Content: &launches},
 	}
 
 	_, _, err := send.RunImport(context.Background(), api, meta, "results.zip")
