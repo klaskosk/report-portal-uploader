@@ -43,8 +43,8 @@ type RPImportAPI interface {
 	GetLatestByName(
 		ctx context.Context,
 		project, launchName string,
-	) (*types.PageLaunchResource, error)
-	GetLaunchByUUID(ctx context.Context, project, launchUUID string) (*types.LaunchResource, error)
+	) (*types.PageLaunchViewModel, error)
+	GetLaunchByUUID(ctx context.Context, project, launchUUID string) (*types.LaunchViewModel, error)
 	UpdateLaunch(
 		ctx context.Context,
 		project string,
@@ -89,7 +89,7 @@ func (api *ClientImportAPI) ImportJUnit(
 func (api *ClientImportAPI) GetLatestByName(
 	ctx context.Context,
 	project, launchName string,
-) (*types.PageLaunchResource, error) {
+) (*types.PageLaunchViewModel, error) {
 	scope := api.Client.Project(project)
 
 	page, err := scope.Launches().GetLatest(ctx, client.WithLaunchName(launchName))
@@ -104,7 +104,7 @@ func (api *ClientImportAPI) GetLatestByName(
 func (api *ClientImportAPI) GetLaunchByUUID(
 	ctx context.Context,
 	project, launchUUID string,
-) (*types.LaunchResource, error) {
+) (*types.LaunchViewModel, error) {
 	scope := api.Client.Project(project)
 
 	launch, err := scope.Launches().GetByUUID(ctx, launchUUID)
@@ -255,7 +255,7 @@ func recoverLaunchAfterTimeout(
 	return latest.Uuid, nil
 }
 
-func launchUUIDFromRequestID(launch types.LaunchResource, requestID string) (string, bool, error) {
+func launchUUIDFromRequestID(launch types.LaunchViewModel, requestID string) (string, bool, error) {
 	for _, attr := range derefAttributes(launch.Attributes) {
 		if attr.Key == nil || *attr.Key != LaunchRequestIDAttrKey {
 			continue
@@ -273,7 +273,7 @@ func launchUUIDFromRequestID(launch types.LaunchResource, requestID string) (str
 	return "", false, nil
 }
 
-func validateRecoveredLaunchAge(launch types.LaunchResource) error {
+func validateRecoveredLaunchAge(launch types.LaunchViewModel) error {
 	if launch.LastModified == nil {
 		return nil
 	}

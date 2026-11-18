@@ -2,6 +2,7 @@ package send_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/klaskosk/report-portal-cli/pkg/types"
@@ -10,6 +11,7 @@ import (
 )
 
 type fakePostImportAPI struct {
+	mutex       sync.Mutex
 	items       []types.TestItemResource
 	updated     []int64
 	attachments []string
@@ -52,6 +54,9 @@ func (fake *fakePostImportAPI) UpdateItemAttributes(
 	itemID int64,
 	_ []send.LaunchAttribute,
 ) error {
+	fake.mutex.Lock()
+	defer fake.mutex.Unlock()
+
 	fake.updated = append(fake.updated, itemID)
 
 	return nil
@@ -63,6 +68,9 @@ func (fake *fakePostImportAPI) CreateAttachmentLogs(
 	attachments []string,
 	_ string,
 ) error {
+	fake.mutex.Lock()
+	defer fake.mutex.Unlock()
+
 	fake.attachments = append(fake.attachments, attachments...)
 
 	return nil
