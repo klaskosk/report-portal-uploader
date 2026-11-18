@@ -129,9 +129,9 @@ make image       # podman build -t quay.io/rh-ee-klaskosk/report-portal-uploader
 make image-push  # TAG=... to override; local builds default to :dev, not :latest
 ```
 
-`.github/workflows/container-image.yaml` builds and smoke-tests the image on
-every pull request without registry credentials, then builds it on every push to
-`main` and pushes `:latest` plus a `:sha-<commit>` tag; the
+`.github/workflows/container-image-pr.yaml` builds and smoke-tests the image on
+every pull request without registry credentials. `.github/workflows/container-image.yaml`
+builds the image on every push to `main` and pushes `:latest` plus a `:sha-<commit>` tag; the
 commit SHA and image digest are written to the workflow run summary. It
 authenticates with the `QUAY_USERNAME` and `QUAY_TOKEN` repository secrets (a
 Quay robot account token with write access to
