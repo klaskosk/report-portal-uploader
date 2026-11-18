@@ -28,10 +28,21 @@ const (
 )
 
 var (
-	baseURL      string
-	bearerToken  string
+	baseURL       string
+	bearerToken   string
 	rpuBinaryPath string
 )
+
+func TestMain(m *testing.M) {
+	// Fedora SELinux blocks Ryuk from connecting to the Docker socket unless it
+	// runs privileged. GitHub Actions also supports privileged containers, so
+	// use that mode by default while still allowing callers to override it.
+	if os.Getenv("TESTCONTAINERS_RYUK_CONTAINER_PRIVILEGED") == "" {
+		os.Setenv("TESTCONTAINERS_RYUK_CONTAINER_PRIVILEGED", "true")
+	}
+
+	os.Exit(m.Run())
+}
 
 func TestIntegration(t *testing.T) {
 	RegisterFailHandler(Fail)

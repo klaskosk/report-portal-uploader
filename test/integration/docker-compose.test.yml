@@ -35,6 +35,9 @@ services:
       - "8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+    # Fedora SELinux otherwise blocks Traefik from connecting to Docker.
+    security_opt:
+      - label=disable
     command:
       - --providers.docker=true
       - --providers.docker.constraints=Label(`traefik.expose`, `${RP_TEST_STACK_ID:-rptest}`)
