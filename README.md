@@ -46,7 +46,8 @@ make tidy
 ### Container image
 
 The binary is also published as a container image, which is usually easier to
-consume from CI than a loose binary. It is rebuilt on every commit to `main`:
+consume from CI than a loose binary. It is rebuilt on every commit to
+`main`, and versioned on every `v*` tag (e.g. `v0.1.0` → `:v0.1.0`):
 
 ```bash
 podman pull quay.io/rh-ee-klaskosk/report-portal-uploader:latest
@@ -132,8 +133,9 @@ make image-push  # TAG=... to override; local builds default to :dev, not :lates
 `.github/workflows/container-image-pr.yaml` builds the image on every pull
 request without registry credentials and checks that the container starts.
 `.github/workflows/container-image.yaml` builds the image on every push to
-`main` and pushes `:latest` plus a `:sha-<commit>` tag; the
-commit SHA and image digest are written to the workflow run summary. It
+`main` (`:latest` and `:sha-<commit>`) and on every `v*` tag (`:v*` and
+`:sha-<commit>`); the commit SHA and image digest are written to the
+workflow run summary. It
 authenticates with the `QUAY_USERNAME` and `QUAY_TOKEN` repository secrets (a
 Quay robot account token with write access to
 `rh-ee-klaskosk/report-portal-uploader`). The Quay repository must already exist
@@ -537,7 +539,7 @@ make test-integration   # cd test/integration && go test -tags=integration -v ./
 2. `make test` (unit).
 3. Integration tests with coverage and Ginkgo JSON report (`-ginkgo.json-report=integration-report.json`), then a step that fails if any spec is not `passed`.
 
-`.github/workflows/container-image.yaml` builds the UBI 9 micro image on `push` to `main` only and pushes it to Quay (`:latest` and `:sha-<commit>`).
+`.github/workflows/container-image.yaml` builds the UBI 9 micro image on `push` to `main` (`:latest` and `:sha-<commit>`) and on `v*` tags (`:v*` and `:sha-<commit>`) and pushes to Quay.
 
 ### Linting and formatting
 
