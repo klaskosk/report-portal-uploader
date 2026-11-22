@@ -46,7 +46,8 @@ make tidy
 ### Container image
 
 The binary is also published as a container image, which is usually easier to
-consume from CI than a loose binary. It is rebuilt on every commit to `main`, and versioned on every `v*` tag (e.g. `v0.1.0` → `:v0.1.0`):
+consume from CI than a loose binary. It is rebuilt on every commit to
+`main`, and versioned on every `v*` tag (e.g. `v0.1.0` → `:v0.1.0`):
 
 ```bash
 podman pull quay.io/rh-ee-klaskosk/report-portal-uploader:latest
@@ -133,8 +134,8 @@ make image-push  # TAG=... to override; local builds default to :dev, not :lates
 request without registry credentials and checks that the container starts.
 `.github/workflows/container-image.yaml` builds the image on every push to
 `main` (`:latest` and `:sha-<commit>`) and on every `v*` tag (`:v*` and
-`:sha-<commit>`); the
-commit SHA and image digest are written to the workflow run summary. It
+`:sha-<commit>`); the commit SHA and image digest are written to the
+workflow run summary. It
 authenticates with the `QUAY_USERNAME` and `QUAY_TOKEN` repository secrets (a
 Quay robot account token with write access to
 `rh-ee-klaskosk/report-portal-uploader`). The Quay repository must already exist
