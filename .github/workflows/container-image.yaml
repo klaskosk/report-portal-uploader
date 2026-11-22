@@ -3,6 +3,7 @@ name: Container image
 on:
   push:
     branches: [main]
+    tags: ['v*']
 
 permissions:
   contents: read
@@ -33,8 +34,11 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.IMAGE }}
+          flavor: |
+            latest=false
           tags: |
-            type=raw,value=latest
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=tag
             type=sha,format=short,prefix=sha-
 
       - name: Build and push
@@ -60,6 +64,7 @@ jobs:
             echo "| Field | Value |"
             echo "|---|---|"
             echo "| Commit | \`${{ github.sha }}\` |"
-            echo "| Tags | \`latest\`, \`sha-${GITHUB_SHA::7}\` |"
+            echo "| Ref | \`${{ github.ref }}\` |"
+            echo "| Tags | \`${{ steps.meta.outputs.version }}\` |"
             echo "| Digest | \`${{ steps.build.outputs.digest }}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
